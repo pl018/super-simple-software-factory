@@ -136,7 +136,7 @@ adws/adw_data/sessions/{adw_id}/
 ├── context_handoff/        the ONE place agents write files for the agents that follow
 └── {agent_name}/
     ├── prompts/            exact prompts sent (system.md + user.md), saved before execution
-    ├── pi_sessions/        pi's own session state for this agent
+    ├── agent_sessions/     backend session state (pi sessions, claude markers, codex thread map)
     ├── raw_output.jsonl    full JSONL stream from the coding agent, appended live
     └── envelope.json       the final valid-JSON response — captured, validated, persisted by code
 ```
@@ -147,10 +147,10 @@ adws/adw_data/sessions/{adw_id}/
 
 ```json
 {
-  "planner": {"session_id": "sssf-a1b2c3d4-planner-9f2e",
-              "model": "google/gemini-3.6-flash", "coding_agent": "pi"},
+  "planner": {"session_id": "7f4a2b1c-9d3e-4f5a-8b6c-1a2b3c4d5e6f",
+              "model": "claude-fable-5", "coding_agent": "claude_code"},
   "builder": {"session_id": "sssf-a1b2c3d4-builder-71ac",
-              "model": "google/gemini-3.6-flash", "coding_agent": "pi"}
+              "model": "gpt-5.6-sol", "coding_agent": "codex"}
 }
 ```
 

@@ -58,7 +58,7 @@ Copy `.claude/skills/sssf/` into the target repo and type `/sssf install` inside
 
 ### Manual Install
 
-**Prereqs:** [`uv`](https://docs.astral.sh/uv/), [`pi`](https://github.com/mariozechner/pi-coding-agent), `sqlite3`, and an API key for whichever providers your roster names (see below). [`bun`](https://bun.sh) only if you want the visualizer.
+**Prereqs:** [`uv`](https://docs.astral.sh/uv/), `sqlite3`, and the CLIs your roster names — [Claude Code](https://claude.com/claude-code) (`claude`, logged into your Claude subscription) and/or the [Codex CLI](https://github.com/openai/codex) (`codex login`, on your ChatGPT plan). No API keys for the starter roster; [`pi`](https://github.com/mariozechner/pi-coding-agent) only if you add an API-key provider such as Gemini (see below). [`bun`](https://bun.sh) only if you want the visualizer.
 
 ```bash
 # 1. get the skill into the target repo
@@ -67,8 +67,8 @@ cp -r /path/to/super-simple-software-factory/.claude/skills/sssf .claude/skills/
 
 # 2. stamp the factory (run from the target repo ROOT, the cwd is where everything lands)
 uv run .claude/skills/sssf/scripts/install.py
-cp .env.sample .env                              # then set OPENROUTER_API_KEY
-pi --version                                     # confirm pi is on PATH, or set PI_PATH in .env
+cp .env.sample .env                              # no keys needed — subscription auth
+claude --version && codex --version              # the CLIs the starter roster runs on
 git init && git commit --allow-empty -m init     # chains that end in a commit phase need a repo
 
 # 3. smoke test: two cheap read-only runs, end to end
@@ -82,23 +82,21 @@ uv run adws/adw_prompt.py "reply with a one-line summary of this repo" --agent s
 
 Re-running `install.py` is safe. It skips every file that already exists and reports what it skipped, so a second run doubles as a drift check. `--force` refreshes stamped code to the skill's current version, but it overwrites **all** stamped files including your `sssf.config.yaml` and your prompts, so commit first.
 
-Green on the smoke test means the whole path works: config validated, session minted, Pi ran, envelope parsed, events landed in `adws/adw_data/sssf.db`. Fix it there before composing anything larger, because every multi-agent chain rides this exact path.
+Green on the smoke test means the whole path works: config validated, session minted, the coding agent ran, envelope parsed, events landed in `adws/adw_data/sssf.db`. Fix it there before composing anything larger, because every multi-agent chain rides this exact path.
 
-### Which API keys you actually need
+### Auth: subscriptions, not API keys
 
-That depends on your roster, not on this repo. Every `model:` in `sssf.config.yaml` is written `provider/model-id`, and the provider half decides the key. Which key pi reads for a given provider comes from `~/.pi/agent/models.json`.
+Every agent names a `coding_agent` backend, and the backend decides how inference is paid for:
 
-The starter roster deliberately mixes providers to show the point, so out of the box it wants three:
+| Backend | Runs | Auth | In the starter roster |
+|---|---|---|---|
+| `claude_code` | Claude models via `claude -p` | your Claude Code login — plan usage, not API billing (headless/CI: `claude setup-token` → `CLAUDE_CODE_OAUTH_TOKEN`) | planner + reviewer (`claude-fable-5`), scout (`claude-sonnet-5`) |
+| `codex` | GPT models via `codex exec` | your `codex login` (ChatGPT plan) | builder + documenter (`gpt-5.6-sol`) |
+| `pi` | anything with an API key | provider env keys via pi's catalog | nobody — kept as the on-ramp for Gemini etc. |
 
-| Model in the starter roster | Provider | Key |
-|---|---|---|
-| `google/gemini-3.6-flash` (default, builder, scout) | served via openrouter | `OPENROUTER_API_KEY` |
-| `fireworks/accounts/fireworks/models/kimi-k3` (planner) | fireworks | `FIREWORKS_API_KEY` |
-| `openai/gpt-5.6-terra`, `openai/gpt-5.6-luna` (reviewer, documenter) | openai | `OPENAI_API_KEY` |
+The split is deliberate: Sol builds, Fable reviews — the model that authored a diff never grades it. Token breakdowns land in the trace for every backend; dollar cost is reported by claude_code and zero for codex (subscription — apply API rates to the token counts if you want a figure).
 
-**Want one key instead of three?** Delete the per-agent `model:` lines and let every agent inherit `defaults.model`. The whole roster then runs on one provider. Cheapest way to get a first green run.
-
-One sharp edge worth knowing: `agents.validate()` checks that a model is *written* as `provider/id`, not that the provider is reachable or that its key is set. A missing key does not fail at startup. It fails when that agent runs, partway into a chain.
+One sharp edge worth knowing: for claude_code and codex the model id passes straight to the CLI — `agents.validate()` checks the binary exists, not that the id is real or the login is live. A wrong model or expired login does not fail at startup. It fails when that agent runs, partway into a chain.
 
 
 ---
@@ -148,8 +146,8 @@ There is no DSL here. No framework to learn. It is Python, YAML, agents, and a s
 
 ```yaml
 defaults:
-  coding_agent: pi                 # v1 runs pi only, claude_code is schema-valid and stubbed
-  model: google/gemini-3.6-flash   # provider/model-id, a bare id can match several providers
+  coding_agent: claude_code        # claude_code | codex | pi — dispatched per agent
+  model: claude-sonnet-5           # the id the backend's CLI accepts (pi: provider/model-id)
   thinking: medium                 # off | minimal | low | medium | high | xhigh | max
   protected_files:                 # no agent may edit the machinery that grades it
     - adws/adw_modules/
@@ -159,17 +157,21 @@ defaults:
 
 agents:
   - name: planner
-    model: fireworks/accounts/fireworks/models/kimi-k3
-    thinking: high                 # per-agent overrides win over defaults
+    model: claude-fable-5          # per-agent overrides win over defaults
+    thinking: high
     color: "#a78bfa"               # this agent's lane swatch in the trace
     purpose: Turn a request into a plan the builder can implement without asking questions.
     prompt_engineering:
       system: adws/adw_data/prompt_engineering/planner/system.md
       user: adws/adw_data/prompt_engineering/planner/user.md
-    harness_engineering:
-      - adws/adw_data/harness_engineering/subagents.ts   # this agent can spawn subagents
     writes:                        # the plan is all it may leave in the repo
       - specs/
+    tools: [read, grep, find, ls, bash, write, task]   # task = Claude Code subagents
+
+  - name: builder
+    coding_agent: codex            # cross-model on purpose: Sol builds, Fable reviews
+    model: gpt-5.6-sol
+    thinking: high
 ```
 
 Five starter agents ship in the box: `planner`, `builder`, `scout` (read-only recon), `reviewer`, and `documenter`. There is no tester, because running a suite is a known command and therefore code.
@@ -242,7 +244,7 @@ Determinism is wired into every step. Agents must return a specific structure, e
 
 Gates verify claims, never predictions. Nobody knows which files an agent will touch before it finishes, so gates run **after** the fact against the envelope's own declarations: `artifacts_exist`, `files_non_empty`, `json_parses`, `diff_matches_claims`, `tests_pass(...)`. A gate is a callable with the signature `gate(envelope, run) -> GateReport`, one `check(item, ok, note)` per thing it examined, so a green gate tells you *what* it verified.
 
-When JSON does not parse or a gate returns violations, **nothing restarts**. The harness re-prompts the same session with a correction naming exactly what was wrong, and the context window stays intact. Pi treats `--session-id` as create-or-continue, so running an agent and continuing it are the same call. A cold restart throws away everything the agent learned. A correction costs one message.
+When JSON does not parse or a gate returns violations, **nothing restarts**. The harness re-prompts the same session with a correction naming exactly what was wrong, and the context window stays intact. Every backend is driven create-or-continue — pi via `--session-id`, Claude Code via `--session-id`/`--resume`, codex via `exec resume <thread>` — so running an agent and continuing it are the same call. A cold restart throws away everything the agent learned. A correction costs one message.
 
 The output contract lives in three places and they are one thing: the type in `data_types.py`, the JSON example in that agent's `user.md` `## Report` section, and `output_type=` at the call site. **Change one, change all three in the same edit.**
 
@@ -258,7 +260,7 @@ One data path, no exceptions: **agents write to SQLite, readers poll SQLite.** `
 
 Ten event types land across seven tables: `sessions`, `phases`, `events`, `envelopes`, `gate_results`, `agent_sessions`, and `processes` (adw_id to pid, so a stuck run can be found and stopped). Every event logs against both its `adw_id` and its `phase_id`, and `parent_id` nests spans, so an agent phase expands into its own tool calls.
 
-Pi announces a tool call across three raw events, so the interface folds them into exactly **one** `tool_call` row per real call. Each row is named the way you would read it aloud (`bash: ls -la src`) and carries `{tool, tool_call_id, args, result_snippet, ok, duration_ms, agent}`.
+Each backend announces a tool call across several raw events (pi in three, Claude Code as a tool_use/tool_result pair, codex as item lifecycle events), so each interface folds them into exactly **one** normalized `tool_call` row per real call. Each row is named the way you would read it aloud (`bash: ls -la src`) and carries `{tool, tool_call_id, args, result_snippet, ok, duration_ms, agent}`.
 
 ```sql
 select * from events where adw_id = ? and rowid > ? order by rowid limit 500;
@@ -362,7 +364,8 @@ Honest edges, because knowing them is cheaper than discovering them.
 | An agent edits something it should not | Detected and rolled back after the call, and the phase fails | Expected. Widen that agent's `writes` if the change was legitimate |
 | Commit phase has nothing to commit | `commit_all` raises if the cwd is not a git repo or nothing changed | `git init` with one commit first. A no-op build fails the phase rather than committing nothing |
 | `install.py --force` | Overwrites **all** stamped files, config and prompts included | Commit before you force |
-| `coding_agent: claude_code` | Schema-valid, but `agent_cc.py` raises | v1 is Pi only |
+| A wrong model id or expired CLI login | claude_code/codex model ids pass straight to the CLI, so validate can't catch them — the agent's first run fails mid-chain | `claude -p --model <id>` / `codex login status` before long chains; codex ids on ChatGPT auth are account-specific (`gpt-5.6-sol`) |
+| `tools:` on a codex agent | Codex has no per-tool filtering; the list is ignored | The enforced boundary is `writes:` + `protected_files`, which is backend-agnostic |
 
 Also missing on purpose, so you know what to add: this runs on your current branch. For real work you want a branch per run, a sandbox around the agent, and a merge step at the end.
 

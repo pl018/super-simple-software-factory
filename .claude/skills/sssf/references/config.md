@@ -8,8 +8,8 @@ It lives at **`adws/adw_sssf_config/sssf.config.yaml`** — the default path eve
 
 ```yaml
 defaults:
-  coding_agent: pi
-  model: google/gemini-3.6-flash        # ALWAYS provider/model-id
+  coding_agent: claude_code
+  model: claude-sonnet-5                # the id the backend's CLI accepts (pi: provider/model-id)
   thinking: medium
   harness_engineering: []
   tools: [read, bash, edit, write, grep, find, ls]
@@ -21,8 +21,8 @@ observability:
 
 agents:
   - name: planner
-    coding_agent: pi
-    model: google/gemini-3.6-flash        # ALWAYS provider/model-id
+    coding_agent: claude_code
+    model: claude-fable-5
     thinking: high
     color: "#a78bfa"
     purpose: Turn a request into a plan the builder can implement without asking questions.
@@ -42,11 +42,11 @@ agents:
 
 | Field | Type | Meaning |
 |---|---|---|
-| `coding_agent` | `pi` \| `claude_code` | Which interface runs the agent. **v1 implements `pi` only**; `claude_code` is specced and stubbed in `agent_cc.py`, landing in v2. |
-| `model` | string | Model id. For Pi, any id registered in `~/.pi/agent/models.json`. Default `gemini-3.6-flash`. |
+| `coding_agent` | `claude_code` \| `codex` \| `pi` | Which interface runs the agent — `agent_cc.py` (Claude Code CLI, Claude subscription), `agent_codex.py` (Codex CLI, ChatGPT subscription), `agent_pi.py` (API-key providers). Dispatched per agent, so one roster mixes backends. |
+| `model` | string | The id the backend's CLI accepts, passed verbatim: claude_code `claude-fable-5`/`claude-sonnet-5`/aliases; codex an account-specific id like `gpt-5.6-sol`; pi `provider/model-id` resolved against its catalog. Default `claude-sonnet-5`. |
 | `thinking` | enum | Reasoning effort — see below. Default `medium`. |
 | `color` | hex string | Lane color for every agent that does not set its own. Default empty — the visualizer falls back to its own palette. |
-| `harness_engineering` | list[string] | Coding-agent extensions. Pi: extension names. Claude Code: reserved (MCP, hooks). |
+| `harness_engineering` | list[string] | Pi extensions (`-e`). Pi agents only — claude_code and codex agents fail validation if this is set (Claude Code's built-in `task` tool covers what the subagents extension did). |
 | `tools` | list[string] | Roster-wide tool allowlist. Every agent that omits its own `tools` inherits this. Unset = all tools usable. |
 | `protected_files` | list[string] | Paths **no** agent may modify unless it names them in its own `writes`. Default: `adws/adw_modules/`, `adws/adw_sssf_config/`, `adws/adw_*.py` — an agent must not be able to edit the machinery that decides whether its work passed. |
 | `data_dir` | path | Runtime home. Sessions land at `{data_dir}/sessions/{adw_id}/{agent_name}/`. Default `adws/adw_data`. |
@@ -85,11 +85,13 @@ Pi's reasoning-effort ladder, lowest to highest:
 off | minimal | low | medium | high | xhigh | max
 ```
 
-Mapped to Pi's reasoning effort control and honored when the model is registered with `reasoning: true` in `~/.pi/agent/models.json`. On a non-reasoning model the setting is inert — no error, no effect. Rough guidance: `high`/`xhigh` for planners and reviewers, `medium` for builders, `low` for mechanical read-and-report agents. (For Claude Code in v2, the same field maps to the thinking budget.)
+One scale, three mappings. claude_code folds it onto `--effort` (off/minimal/low→`low`, medium→`medium`, high/xhigh/max→`high`); codex maps it onto `model_reasoning_effort` (off/minimal→`minimal`, max→`xhigh`, the rest one-to-one); pi passes it to its reasoning-effort control, honored when the model is registered `reasoning: true` — inert otherwise, no error. Rough guidance: `high`/`xhigh` for planners and reviewers, `medium` for builders, `low` for mechanical read-and-report agents.
 
 ## Model resolution
 
-**Always write `model` as `provider/model-id`.** `agents.py` hands the string to the Pi interface, which resolves it against pi's merged catalog — `~/.pi/agent/models.json` plus pi's built-in providers. The same model is usually carried by more than one provider (`gemini-3.6-flash` lives under `google` *and* under `openrouter` as `google/gemini-3.6-flash`), and a bare id that matches several **raises at resolution**:
+**claude_code and codex: the id passes straight to the CLI.** There is no catalog to resolve against, so `agents.validate()` only checks the binary exists — a wrong id fails at the agent's FIRST RUN, partway into a chain, not at startup. Claude Code accepts full ids (`claude-fable-5`) and aliases (`sonnet`); codex ids on ChatGPT auth are account-specific (this account: `gpt-5.6-sol` — bare `gpt-5.6` is rejected).
+
+**pi: always write `model` as `provider/model-id`.** `agents.py` hands the string to the Pi interface, which resolves it against pi's merged catalog — `~/.pi/agent/models.json` plus pi's built-in providers. The same model is usually carried by more than one provider (`gemini-3.6-flash` lives under `google` *and* under `openrouter` as `google/gemini-3.6-flash`), and a bare id that matches several **raises at resolution**:
 
 ```
 agent 'scout': model pattern 'gemini-3.6-flash' is ambiguous:
@@ -98,7 +100,7 @@ agent 'scout': model pattern 'gemini-3.6-flash' is ambiguous:
 
 That is `agents.validate()` doing its job — it fails before anything spawns rather than silently billing the wrong provider — but it means every agent in the roster inheriting that default is grounded until the pattern is qualified. Qualifying is the whole fix: `google/gemini-3.6-flash`, `openai/gpt-5.6-terra`, `fireworks/accounts/fireworks/models/kimi-k3`. The leading segment is matched against the provider list first, so the rest of the string can contain slashes.
 
-Other consequences worth knowing:
+Other consequences worth knowing (pi agents):
 
 - A model must be in the catalog before any agent can name it. An unknown id fails at resolution, before spawn. `pi --list-models` is the catalog the resolver actually reads.
 - **Ambiguity can appear without you touching the config.** Registering a new provider that carries a model you already use turns a formerly-fine bare pattern ambiguous. If a roster stops validating and nobody edited it, that is why.
@@ -107,7 +109,7 @@ Other consequences worth knowing:
 
 ## Tools
 
-`tools` maps to `pi --tools`. Pi's seven builtin tool names:
+The list is written in sssf's seven canonical names and each backend maps it onto its own surface. **claude_code**: read→Read, bash→Bash, edit→Edit, write→Write, grep→Grep, find/ls→Glob, task→Task; Claude-native names (WebSearch, NotebookEdit) pass through as written; restriction is enforced as the complement via `--disallowedTools` because bypassPermissions makes an allowlist a no-op. **codex**: no per-tool filtering exists — the list is ignored, and the boundary that actually holds is `writes:` + `protected_files` below. **pi**: maps to `pi --tools`; pi's builtin names and defaults:
 
 | Tool | Purpose | Pi's own default |
 |---|---|---|

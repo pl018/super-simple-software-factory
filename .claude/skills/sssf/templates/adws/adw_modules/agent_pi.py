@@ -16,7 +16,7 @@ from functools import lru_cache
 from pathlib import Path
 from typing import Callable, Optional
 
-from .data_types import PiRequest, PiResult
+from .data_types import AgentConfig, AgentRequest, AgentResult
 from .utils import now_iso, operator_env
 
 PI_PATH = os.environ.get("PI_PATH", "pi")
@@ -205,9 +205,18 @@ class ToolCallTracker:
         }
 
 
-def run(request: PiRequest, on_event: Optional[Callable[[dict], None]] = None,
+def validate_agent(agent: AgentConfig) -> list[str]:
+    """Backend-specific config problems for one agent, checked before any run."""
+    try:
+        resolve_model(agent.model)
+    except ValueError as error:
+        return [str(error)]
+    return []
+
+
+def run(request: AgentRequest, on_event: Optional[Callable[[dict], None]] = None,
         on_spawn: Optional[Callable[[int], None]] = None,
-        on_exit: Optional[Callable[[int], None]] = None) -> PiResult:
+        on_exit: Optional[Callable[[int], None]] = None) -> AgentResult:
     """Run one non-interactive pi turn.
 
     `on_spawn(pid)` and `on_exit(pid)` bracket the child process so the caller
@@ -232,8 +241,8 @@ def run(request: PiRequest, on_event: Optional[Callable[[dict], None]] = None,
     raw_path = Path(request.raw_output_path)
     raw_path.parent.mkdir(parents=True, exist_ok=True)
 
-    result = PiResult(session_id=request.session_id,
-                      context_window=context_window(provider, model_id))
+    result = AgentResult(session_id=request.session_id,
+                         context_window=context_window(provider, model_id))
     # stdin is DEVNULL, deliberately. The prompt travels in argv, so the child
     # never needs stdin — but inheriting the parent's means pi sees a non-TTY
     # and can sit forever waiting for piped input that will never arrive or

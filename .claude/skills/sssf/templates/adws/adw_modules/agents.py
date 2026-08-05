@@ -10,16 +10,22 @@ disposes.
 from __future__ import annotations
 
 import json
+import uuid
 from pathlib import Path
 from typing import Optional
 
 import yaml
 
-from . import agent_pi, permissions, prompts
-from .data_types import (AgentCall, AgentConfig, EnvelopeBase, EventRecord,
-                         GateCheck, GateReport, Phase, PiRequest, SSSFConfig,
-                         UsageBreakdown)
+from . import agent_cc, agent_codex, agent_pi, permissions, prompts
+from .data_types import (AgentCall, AgentConfig, AgentRequest, AgentResult,
+                         EnvelopeBase, EventRecord, GateCheck, GateReport,
+                         Phase, SSSFConfig, UsageBreakdown)
 from .utils import new_id
+
+# One seam, three backends. Each module exposes the same duck-typed surface:
+# run(request, on_event, on_spawn, on_exit) -> AgentResult, ToolCallTracker,
+# and validate_agent(agent) -> [problems].
+BACKENDS = {"pi": agent_pi, "claude_code": agent_cc, "codex": agent_codex}
 
 JSON_FIX_ATTEMPTS = 2      # continue-with-correction attempts for malformed JSON
 
@@ -58,17 +64,16 @@ def validate(cfg: SSSFConfig, required: list[str]) -> None:
         except SystemExit as e:
             problems.append(str(e))
             continue
-        if agent.coding_agent != "pi":
+        backend = BACKENDS.get(agent.coding_agent)
+        if backend is None:
             problems.append(f"agent {name!r}: coding_agent {agent.coding_agent!r} "
-                            f"is not implemented in v1 (pi only)")
+                            f"is not one of {sorted(BACKENDS)}")
+        else:
+            problems.extend(f"agent {name!r}: {p}" for p in backend.validate_agent(agent))
         for label, ref in (("system", agent.prompt_engineering.system),
                            ("user", agent.prompt_engineering.user)):
             if not Path(ref).is_file():
                 problems.append(f"agent {name!r}: {label} prompt not found: {ref}")
-        try:
-            agent_pi.resolve_model(agent.model)
-        except ValueError as e:
-            problems.append(f"agent {name!r}: {e}")
     if problems:
         raise SystemExit("config validation failed:\n- " + "\n- ".join(problems))
 
@@ -103,30 +108,32 @@ def execute(run, phase: Phase, call: AgentCall) -> EnvelopeBase:
                                           "harness_engineering": agent.harness_engineering}))
     run.console.agent_started(agent.name, agent.model, session_id)
 
-    # Parse retries and gate corrections re-enter the SAME pi session, so the
+    backend = BACKENDS[agent.coding_agent]
+
+    # Parse retries and gate corrections re-enter the SAME session, so the
     # last send is the one whose context occupancy is current — while spend is
     # the opposite: every send costs, so usage accumulates across all of them.
-    latest: agent_pi.PiResult | None = None
+    latest: AgentResult | None = None
     spent = UsageBreakdown()
 
-    def send(prompt_text: str) -> agent_pi.PiResult:
+    def send(prompt_text: str) -> AgentResult:
         nonlocal latest
-        request = PiRequest(
+        request = AgentRequest(
             prompt=prompt_text,
             system_prompt=system_text,
             model=agent.model,
             thinking=agent.thinking,
             session_id=session_id,
-            # absolute: these are read by the pi subprocess, which runs in repo_root
-            session_dir=str((agent_dir / "pi_sessions").resolve()),
+            # absolute: these are read by the agent subprocess, which runs in repo_root
+            session_dir=str((agent_dir / "agent_sessions").resolve()),
             raw_output_path=str((agent_dir / "raw_output.jsonl").resolve()),
             tools=agent.tools,
             extensions=agent.harness_engineering,
             cwd=str(run.repo_root),
         )
-        result = agent_pi.run(
+        result = backend.run(
             request,
-            on_event=_event_forwarder(run, phase, agent.name),
+            on_event=_event_forwarder(run, phase, agent.name, backend),
             on_spawn=lambda pid: run.tracer.process_start(
                 run.adw_id, "agent", agent.name, pid,
                 f"{agent.coding_agent} {agent.name} {agent.model}"),
@@ -227,14 +234,17 @@ def _as_report(result) -> GateReport:
 
 def _agent_session_id(run, agent: AgentConfig) -> str:
     entry = run.agent_map.get(agent.name)
-    if entry and entry.get("model") == agent.model:
+    if (entry and entry.get("model") == agent.model
+            and entry.get("coding_agent", "pi") == agent.coding_agent):
         return entry["session_id"]           # rejoin the existing context window
+    if agent.coding_agent == "claude_code":
+        return str(uuid.uuid4())             # claude requires UUID session ids
     return f"sssf-{run.adw_id}-{agent.name}-{new_id(4)}"
 
 
-def _event_forwarder(run, phase: Phase, agent_name: str):
+def _event_forwarder(run, phase: Phase, agent_name: str, backend):
     """One tool_call event per real tool call, with its exact args and result."""
-    tracker = agent_pi.ToolCallTracker()
+    tracker = backend.ToolCallTracker()
 
     def forward(event: dict) -> None:
         record = tracker.observe(event)

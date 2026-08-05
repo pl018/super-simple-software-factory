@@ -303,8 +303,8 @@ class PromptEngineering(BaseModel):
 
 class AgentConfig(BaseModel):
     name: str
-    coding_agent: Literal["pi", "claude_code"] = "pi"
-    model: str = "google/gemini-3.6-flash"
+    coding_agent: Literal["pi", "claude_code", "codex"] = "claude_code"
+    model: str = "claude-sonnet-5"
     thinking: str = "medium"        # off | minimal | low | medium | high | xhigh | max
     color: str = ""                 # hex swatch for this agent's lane in the UI
     purpose: str = ""
@@ -323,8 +323,8 @@ class AgentConfig(BaseModel):
 
 
 class ConfigDefaults(BaseModel):
-    coding_agent: Literal["pi", "claude_code"] = "pi"
-    model: str = "google/gemini-3.6-flash"
+    coding_agent: Literal["pi", "claude_code", "codex"] = "claude_code"
+    model: str = "claude-sonnet-5"
     thinking: str = "medium"
     color: str = ""
     harness_engineering: list[str] = Field(default_factory=list)
@@ -368,16 +368,16 @@ class EventRecord(BaseModel):
     ended_at: Optional[str] = None
 
 
-# ── Pi coding agent interface ────────────────────────────────────────────────
+# ── Coding-agent backend interface (pi, claude_code, codex) ──────────────────
 
-class PiRequest(BaseModel):
-    """Everything one non-interactive pi run needs."""
+class AgentRequest(BaseModel):
+    """Everything one non-interactive coding-agent run needs, backend-agnostic."""
 
     prompt: str
     system_prompt: str
-    model: str                      # registry pattern, resolved to provider + id
+    model: str                      # pi: registry pattern; claude_code/codex: the CLI's model id
     thinking: str = "medium"
-    session_id: str                 # pi --session-id: creates or continues
+    session_id: str                 # create-or-continue key; backends map it to their own session scheme
     session_dir: str
     raw_output_path: str            # JSONL stream lands here
     tools: Optional[list[str]] = None
@@ -433,7 +433,7 @@ class UsageBreakdown(BaseModel):
             setattr(self, field, getattr(self, field) + getattr(other, field))
 
 
-class PiResult(BaseModel):
+class AgentResult(BaseModel):
     text: str = ""
     returncode: int = 0
     session_id: str = ""
