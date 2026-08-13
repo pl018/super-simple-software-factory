@@ -44,15 +44,41 @@ const SECTIONS: { status: LiveStatus; label: string }[] = [
   { status: 'idle', label: 'idle' },
 ]
 
-const grouped = computed(() =>
-  SECTIONS.map(({ status, label }) => ({
-    status,
-    label,
-    rows: sessions.value
-      .filter((s) => s.status === status)
-      .toSorted((a, b) => (ts(b.last_activity_at) || 0) - (ts(a.last_activity_at) || 0)),
-  })).filter((g) => g.rows.length > 0),
-)
+type GroupMode = 'status' | 'project' | 'source'
+const MODES: GroupMode[] = ['status', 'project', 'source']
+const mode = ref<GroupMode>('status')
+
+interface Group {
+  key: string
+  label: string
+  /** Styles the section dot; only status groups carry a live status. */
+  status: LiveStatus | 'plain'
+  rows: LiveSessionSummary[]
+}
+
+function byActivity(a: LiveSessionSummary, b: LiveSessionSummary): number {
+  return (ts(b.last_activity_at) || 0) - (ts(a.last_activity_at) || 0)
+}
+
+const grouped = computed<Group[]>(() => {
+  if (mode.value === 'status') {
+    return SECTIONS.map(({ status, label }) => ({
+      key: status,
+      label,
+      status,
+      rows: sessions.value.filter((s) => s.status === status).toSorted(byActivity),
+    })).filter((g) => g.rows.length > 0)
+  }
+  const keyOf = (s: LiveSessionSummary) => (mode.value === 'project' ? s.project : s.source)
+  const map = new Map<string, LiveSessionSummary[]>()
+  for (const s of sessions.value.toSorted(byActivity)) {
+    const rows = map.get(keyOf(s)) ?? []
+    rows.push(s)
+    map.set(keyOf(s), rows)
+  }
+  // Map preserves insertion order, so groups rank by their freshest session.
+  return [...map.entries()].map(([key, rows]) => ({ key, label: key, status: 'plain' as const, rows }))
+})
 
 function age(s: LiveSessionSummary): string {
   const t = ts(s.last_activity_at)
@@ -80,7 +106,20 @@ function sourceIcon(s: LiveSessionSummary): string | null {
   <div class="live">
     <div v-if="apiError" class="error-bar">api unreachable — retrying {{ apiError }}</div>
 
-    <template v-for="g in grouped" :key="g.status">
+    <div class="toolbar">
+      <span class="toolbar-label">group by</span>
+      <button
+        v-for="m in MODES"
+        :key="m"
+        class="mode-btn"
+        :class="{ active: mode === m }"
+        @click="mode = m"
+      >
+        {{ m }}
+      </button>
+    </div>
+
+    <template v-for="g in grouped" :key="g.key">
       <div class="section-head" :class="g.status">
         <span class="section-dot" />
         {{ g.label }} · {{ g.rows.length }}
@@ -126,6 +165,42 @@ function sourceIcon(s: LiveSessionSummary): string | null {
   padding-bottom: 28px;
 }
 
+.toolbar {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 14px 24px 0;
+}
+
+.toolbar-label {
+  font-size: 13px;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  color: var(--faint);
+  margin-right: 4px;
+}
+
+.mode-btn {
+  padding: 3px 12px;
+  border-radius: 999px;
+  border: 1px solid var(--border);
+  background: transparent;
+  color: var(--dim);
+  font-size: 14px;
+  cursor: pointer;
+}
+
+.mode-btn:hover {
+  color: var(--text);
+  border-color: var(--cyan);
+}
+
+.mode-btn.active {
+  color: var(--cyan);
+  border-color: var(--cyan);
+  background: rgba(90, 210, 221, 0.08);
+}
+
 .section-head {
   display: flex;
   align-items: center;
@@ -133,6 +208,15 @@ function sourceIcon(s: LiveSessionSummary): string | null {
   padding: 18px 24px 0;
   font-size: 16px;
   color: var(--dim);
+}
+
+.section-head.plain {
+  color: var(--text);
+  font-weight: 700;
+}
+
+.section-head.plain .section-dot {
+  background: var(--cyan);
 }
 
 .section-dot {

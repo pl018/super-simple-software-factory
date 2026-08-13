@@ -94,7 +94,7 @@ function isMetaUserText(text: string): boolean {
   return text.startsWith("<") || text.startsWith("Caveat:");
 }
 
-function claudeLine(s: Mutable, d: Record<string, unknown>): void {
+function claudeLine(s: Mutable, d: Record<string, unknown>, sidechain = false): void {
   const ts = typeof d.timestamp === "string" ? d.timestamp : null;
   if (ts) {
     s.lastTs = ts;
@@ -102,9 +102,23 @@ function claudeLine(s: Mutable, d: Record<string, unknown>): void {
   }
   if (typeof d.cwd === "string") s.cwd = d.cwd;
   if (typeof d.gitBranch === "string") s.gitBranch = d.gitBranch;
-  if (d.isSidechain === true) {
+  if (d.isSidechain === true || sidechain) {
     s.sidechainLines += 1;
-    return; // subagent traffic counts, but does not drive the main feed/status
+    // Subagent work shows in the feed under its own kind, but never touches
+    // main-turn state (turnOpen, title, model, context) — it is a parallel lane.
+    if (d.type === "assistant") {
+      const m = (d.message ?? {}) as Record<string, unknown>;
+      for (const block of ((m.content ?? []) as Record<string, unknown>[])) {
+        if (block?.type === "tool_use") {
+          push(s, {
+            ts, kind: "subagent",
+            label: `sub:${String(block.name ?? "tool")}`,
+            detail: snip((block.input as Record<string, unknown> | undefined)?.command ?? ""),
+          });
+        }
+      }
+    }
+    return;
   }
 
   const type = d.type;
@@ -273,6 +287,26 @@ function readNewBytes(path: string, from: number, size: number): string {
   }
 }
 
+/** Cursor for a subagent child file; its lines accumulate into the PARENT state. */
+const childCache = new Map<string, { offset: number; remainder: string }>();
+
+function parseChunk(s: Mutable, source: LiveSource, chunk: string, sidechain: boolean): string {
+  const lines = chunk.split("\n");
+  const remainder = lines.pop() ?? ""; // incomplete tail line, if any
+  for (const line of lines) {
+    if (!line.trim()) continue;
+    let d: Record<string, unknown>;
+    try {
+      d = JSON.parse(line) as Record<string, unknown>;
+    } catch {
+      continue; // a torn or malformed line never takes the monitor down
+    }
+    if (source === "claude") claudeLine(s, d, sidechain);
+    else codexLine(s, d);
+  }
+  return remainder;
+}
+
 function tail(path: string, source: LiveSource, id: string, size: number): Mutable {
   let st = cache.get(path);
   // A shrunk file (rotation/rewrite) invalidates the accumulated state.
@@ -283,21 +317,23 @@ function tail(path: string, source: LiveSource, id: string, size: number): Mutab
   if (size > st.offset) {
     const chunk = st.remainder + readNewBytes(path, st.offset, size);
     st.offset = size;
-    const lines = chunk.split("\n");
-    st.remainder = lines.pop() ?? ""; // incomplete tail line, if any
-    for (const line of lines) {
-      if (!line.trim()) continue;
-      let d: Record<string, unknown>;
-      try {
-        d = JSON.parse(line) as Record<string, unknown>;
-      } catch {
-        continue; // a torn or malformed line never takes the monitor down
-      }
-      if (source === "claude") claudeLine(st.s, d);
-      else codexLine(st.s, d);
-    }
+    st.remainder = parseChunk(st.s, source, chunk, false);
   }
   return st.s;
+}
+
+/** Tail a subagent transcript into the parent session's state, all lines sidechain. */
+function tailChild(path: string, size: number, parent: Mutable): void {
+  let st = childCache.get(path);
+  if (!st || size < st.offset) {
+    st = { offset: 0, remainder: "" };
+    childCache.set(path, st);
+  }
+  if (size > st.offset) {
+    const chunk = st.remainder + readNewBytes(path, st.offset, size);
+    st.offset = size;
+    st.remainder = parseChunk(parent, "claude", chunk, true);
+  }
 }
 
 // ── scanning ─────────────────────────────────────────────────────────────────
@@ -306,8 +342,12 @@ interface Found {
   path: string;
   id: string;
   source: LiveSource;
+  /** Newest write across the main transcript AND its subagent files — a parent
+   *  waiting on a busy subagent is active, not stalled. */
   mtimeMs: number;
   size: number;
+  /** Subagent transcripts (claude: <project>/<session-id>/subagents/*.jsonl). */
+  children: { path: string; size: number }[];
 }
 
 function listDir(dir: string): string[] {
@@ -327,8 +367,20 @@ function scanClaude(cutoffMs: number): Found[] {
       const path = join(dir, name);
       try {
         const st = statSync(path);
-        if (st.mtimeMs >= cutoffMs) {
-          found.push({ path, id: name.slice(0, -6), source: "claude", mtimeMs: st.mtimeMs, size: st.size });
+        const id = name.slice(0, -6);
+        let mtimeMs = st.mtimeMs;
+        const children: { path: string; size: number }[] = [];
+        for (const sub of listDir(join(dir, id, "subagents"))) {
+          if (!sub.endsWith(".jsonl")) continue;
+          const subPath = join(dir, id, "subagents", sub);
+          try {
+            const subSt = statSync(subPath);
+            children.push({ path: subPath, size: subSt.size });
+            mtimeMs = Math.max(mtimeMs, subSt.mtimeMs);
+          } catch { /* deleted mid-scan */ }
+        }
+        if (mtimeMs >= cutoffMs) {
+          found.push({ path, id, source: "claude", mtimeMs, size: st.size, children });
         }
       } catch { /* deleted mid-scan */ }
     }
@@ -355,7 +407,7 @@ function scanCodex(cutoffMs: number): Found[] {
             if (st.mtimeMs >= cutoffMs) {
               // rollout-<timestamp>-<uuid>.jsonl → the trailing uuid is the id.
               const id = name.slice(0, -6).split("-").slice(-5).join("-");
-              found.push({ path, id, source: "codex", mtimeMs: st.mtimeMs, size: st.size });
+              found.push({ path, id, source: "codex", mtimeMs: st.mtimeMs, size: st.size, children: [] });
             }
           } catch { /* deleted mid-scan */ }
         }
@@ -375,6 +427,7 @@ function status(s: Mutable, mtimeMs: number, nowMs: number): LiveStatus {
 
 function summarize(f: Found, nowMs: number): LiveSessionSummary {
   const s = tail(f.path, f.source, f.id, f.size);
+  for (const child of f.children) tailChild(child.path, child.size, s);
   return {
     id: s.id,
     source: s.source,
@@ -420,6 +473,9 @@ export function liveSessionDetail(
   );
   if (!found) return null;
   const session = summarize(found, nowMs);
-  const feed = cache.get(found.path)?.s.feed ?? [];
+  // Child files append after the main file per poll, so re-order by timestamp
+  // before slicing — the feed must read as one chronological stream.
+  const feed = (cache.get(found.path)?.s.feed ?? [])
+    .toSorted((a, b) => (a.ts ?? "").localeCompare(b.ts ?? ""));
   return { session, activity: feed.slice(-limit) };
 }
