@@ -28,4 +28,8 @@ export type {
   LiveSessionSummary,
   LiveSessionDetail,
   LiveActivityEntry,
+  LiveProc,
+  LiveProcMatch,
+  LiveNudgeState,
+  LiveKillResponse,
 } from '@shared/types'

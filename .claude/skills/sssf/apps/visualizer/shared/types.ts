@@ -315,11 +315,47 @@ export type LiveSource = "claude" | "codex";
 
 /**
  * working — a turn is open and the file grew recently.
- * stalled — a turn is open but the file stopped growing (≥ stall threshold).
+ * stalled — a turn is open, the file stopped growing (≥ stall threshold), but a
+ *           matching CLI process is still alive (long build? hung call?).
+ * dead    — a turn is open, the file stopped growing, and NO matching process
+ *           exists anymore — the CLI died mid-turn.
  * waiting — the turn closed; the session waits on the user.
  * idle    — turn closed and no activity for a long while.
  */
-export type LiveStatus = "working" | "stalled" | "waiting" | "idle";
+export type LiveStatus = "working" | "stalled" | "dead" | "waiting" | "idle";
+
+/** A live claude/codex CLI process that may own a session. */
+export interface LiveProc {
+  pid: number;
+  /** Full argv joined with spaces, truncated server-side. */
+  argv: string;
+  /** Process working directory (readlink /proc/pid/cwd). */
+  cwd: string;
+}
+
+/**
+ * How the session was tied to running processes.
+ * exact — a process argv contains the session id (headless / forked runs).
+ * cwd   — processes of the right CLI share the session's cwd; best effort,
+ *         another session in the same directory can produce a false match.
+ * none  — no candidate process; an open turn in this state means dead.
+ */
+export interface LiveProcMatch {
+  kind: "exact" | "cwd" | "none";
+  procs: LiveProc[];
+}
+
+/** State of the one-shot nudge (resume call) fired at a dead session. */
+export interface LiveNudgeState {
+  status: "running" | "done" | "failed";
+  mode: "report" | "continue";
+  prompt: string;
+  started_at: string;
+  ended_at: string | null;
+  exit_code: number | null;
+  /** Last ~4k chars of combined stdout+stderr. */
+  output_tail: string;
+}
 
 export interface LiveSessionSummary {
   /** Session id: Claude session uuid / Codex rollout session id. */
@@ -357,12 +393,17 @@ export interface LiveSessionSummary {
 /** One normalized transcript entry for the detail feed. */
 export interface LiveActivityEntry {
   ts: string | null;
-  /** user | assistant | thinking | tool | error | meta */
+  /** user | assistant | note | tool | subagent | error | meta */
   kind: string;
   /** Short label, e.g. "Bash", "assistant", "task_complete". */
   label: string;
-  /** Truncated content snippet. */
+  /** Truncated one-line content snippet. */
   detail: string;
+  /**
+   * Full content, whitespace preserved, for drill-down (capped at 20k chars).
+   * Absent when the snippet already IS the full content.
+   */
+  text?: string;
 }
 
 /** GET /api/live/sessions?hours=24 */
@@ -373,4 +414,18 @@ export interface LiveSessionDetail {
   session: LiveSessionSummary;
   /** Newest entries last, capped by ?limit. */
   activity: LiveActivityEntry[];
+  /** Only computed for open-turn sessions past the stall threshold; else null. */
+  proc_match: LiveProcMatch | null;
+  /** Last nudge fired at this session (survives until server restart). */
+  nudge: LiveNudgeState | null;
 }
+
+/** POST /api/live/sessions/:source/:id/kill  { pid, force? } */
+export interface LiveKillResponse {
+  ok: boolean;
+  pid: number;
+  signal: "SIGTERM" | "SIGKILL";
+}
+
+/** POST /api/live/sessions/:source/:id/nudge  { mode?, prompt? } */
+export type LiveNudgeResponse = LiveNudgeState;

@@ -14,7 +14,14 @@ import { existsSync, statSync } from "node:fs";
 import { join, resolve, sep } from "node:path";
 import { SssfDb, resolveDbPath } from "./db.ts";
 import { liveSessionDetail, liveSessions } from "./live.ts";
-import type { AgentPrompts, ApiError, HealthResponse, LiveSource } from "../shared/types.ts";
+import { killPid, nudgeState, startNudge } from "./actions.ts";
+import type {
+  AgentPrompts,
+  ApiError,
+  HealthResponse,
+  LiveKillResponse,
+  LiveSource,
+} from "../shared/types.ts";
 
 const PORT = Number(process.env.PORT ?? 4600);
 const DIST_DIR = resolve(import.meta.dir, "..", "dist");
@@ -142,8 +149,64 @@ const server = Bun.serve({
         intQuery(req, "hours", 24),
         intQuery(req, "limit", 120),
       );
-      return detail ? json(detail) : notFound(`no live session ${source}/${id}`);
+      if (!detail) return notFound(`no live session ${source}/${id}`);
+      detail.nudge = nudgeState(source as LiveSource, id);
+      return json(detail);
     }),
+
+    // Signal a stalled session's CLI. The pid must be one the server itself
+    // matched to this session on THIS request — never an arbitrary number.
+    "/api/live/sessions/:source/:id/kill": {
+      POST: safely(async (req) => {
+        const source = param(req, "source");
+        const id = param(req, "id");
+        if ((source !== "claude" && source !== "codex") || !isSafeSegment(id)) {
+          return json({ error: "invalid source or id" } satisfies ApiError, 400);
+        }
+        const body = (await req.json().catch(() => ({}))) as { pid?: unknown; force?: unknown };
+        const pid = typeof body.pid === "number" ? body.pid : NaN;
+        // A week of lookback: a stalled/dead session can be days old.
+        const detail = liveSessionDetail(source as LiveSource, id, 168, 1);
+        if (!detail) return notFound(`no live session ${source}/${id}`);
+        const candidates = detail.proc_match?.procs ?? [];
+        if (!candidates.some((p) => p.pid === pid)) {
+          return json(
+            { error: "pid is not a matched process for this session (state may have changed — reload)" } satisfies ApiError,
+            409,
+          );
+        }
+        const force = body.force === true;
+        killPid(pid, force);
+        return json({ ok: true, pid, signal: force ? "SIGKILL" : "SIGTERM" } satisfies LiveKillResponse);
+      }),
+    },
+
+    // One-time resume call at a DEAD session (turn open, no owning process).
+    // Refused while a matching process is alive — two writers on one
+    // transcript is worse than a stall.
+    "/api/live/sessions/:source/:id/nudge": {
+      POST: safely(async (req) => {
+        const source = param(req, "source");
+        const id = param(req, "id");
+        if ((source !== "claude" && source !== "codex") || !isSafeSegment(id)) {
+          return json({ error: "invalid source or id" } satisfies ApiError, 400);
+        }
+        const body = (await req.json().catch(() => ({}))) as { mode?: unknown; prompt?: unknown };
+        const mode = body.mode === "continue" ? "continue" : "report";
+        const prompt = typeof body.prompt === "string" ? body.prompt : null;
+        const detail = liveSessionDetail(source as LiveSource, id, 168, 1);
+        if (!detail) return notFound(`no live session ${source}/${id}`);
+        if (detail.session.status !== "dead") {
+          return json(
+            { error: `session is ${detail.session.status}, not dead — nudge only fires when no process owns the session` } satisfies ApiError,
+            409,
+          );
+        }
+        const state = startNudge(source as LiveSource, id, detail.session.cwd, mode, prompt);
+        if ("error" in state) return json(state satisfies ApiError, 409);
+        return json(state);
+      }),
+    },
 
     "/api/sessions": safely((req) => json(db.sessions(intQuery(req, "limit", 200)))),
 
