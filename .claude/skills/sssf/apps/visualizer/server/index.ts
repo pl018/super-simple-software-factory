@@ -13,7 +13,8 @@
 import { existsSync, statSync } from "node:fs";
 import { join, resolve, sep } from "node:path";
 import { SssfDb, resolveDbPath } from "./db.ts";
-import type { AgentPrompts, ApiError, HealthResponse } from "../shared/types.ts";
+import { liveSessionDetail, liveSessions } from "./live.ts";
+import type { AgentPrompts, ApiError, HealthResponse, LiveSource } from "../shared/types.ts";
 
 const PORT = Number(process.env.PORT ?? 4600);
 const DIST_DIR = resolve(import.meta.dir, "..", "dist");
@@ -122,6 +123,27 @@ const server = Bun.serve({
           sessions: db.sessionCount(),
         } satisfies HealthResponse),
     ),
+
+    // Live monitor — sessions tailed from the CLIs' own transcripts on disk.
+    // Same philosophy as the rest of the API: files → parse at poll time → json.
+    "/api/live/sessions": safely((req) =>
+      json(liveSessions(intQuery(req, "hours", 24))),
+    ),
+
+    "/api/live/sessions/:source/:id": safely((req) => {
+      const source = param(req, "source");
+      const id = param(req, "id");
+      if ((source !== "claude" && source !== "codex") || !isSafeSegment(id)) {
+        return json({ error: "invalid source or id" } satisfies ApiError, 400);
+      }
+      const detail = liveSessionDetail(
+        source as LiveSource,
+        id,
+        intQuery(req, "hours", 24),
+        intQuery(req, "limit", 120),
+      );
+      return detail ? json(detail) : notFound(`no live session ${source}/${id}`);
+    }),
 
     "/api/sessions": safely((req) => json(db.sessions(intQuery(req, "limit", 200)))),
 

@@ -304,3 +304,73 @@ export interface HealthResponse {
 export interface ApiError {
   error: string;
 }
+
+// ── live session monitor ─────────────────────────────────────────────────────
+// Sessions tailed straight from the coding agents' own transcripts on disk —
+// ~/.claude/projects/**.jsonl and ~/.codex/sessions/**.jsonl. Nothing here
+// touches sssf.db; the server parses files at poll time (see server/live.ts).
+
+/** Which CLI wrote the transcript. */
+export type LiveSource = "claude" | "codex";
+
+/**
+ * working — a turn is open and the file grew recently.
+ * stalled — a turn is open but the file stopped growing (≥ stall threshold).
+ * waiting — the turn closed; the session waits on the user.
+ * idle    — turn closed and no activity for a long while.
+ */
+export type LiveStatus = "working" | "stalled" | "waiting" | "idle";
+
+export interface LiveSessionSummary {
+  /** Session id: Claude session uuid / Codex rollout session id. */
+  id: string;
+  source: LiveSource;
+  /** Working directory the session runs in; "" when not yet known. */
+  cwd: string;
+  /** Basename of cwd — the display name. */
+  project: string;
+  git_branch: string | null;
+  model: string | null;
+  /** codex only: "codex_exec" for headless runs; null elsewhere. */
+  originator: string | null;
+  /** First real user message, truncated — the card title. */
+  title: string | null;
+  status: LiveStatus;
+  /** Human label for the newest transcript entry, e.g. "tool: Bash". */
+  last_event: string | null;
+  /** ISO timestamp of the newest entry (file mtime when the tail is unparsed). */
+  last_activity_at: string | null;
+  started_at: string | null;
+  /** Completed user→assistant turns. */
+  turns: number;
+  tool_calls: number;
+  /** Sidechain (subagent) lines seen — Claude only. */
+  sidechain_lines: number;
+  /** Context occupancy after the last turn; 0/null window = unknown. */
+  context_tokens: number | null;
+  context_window: number | null;
+  /** Output tokens generated across the session (both sources report it). */
+  output_tokens: number;
+  transcript_path: string;
+}
+
+/** One normalized transcript entry for the detail feed. */
+export interface LiveActivityEntry {
+  ts: string | null;
+  /** user | assistant | thinking | tool | error | meta */
+  kind: string;
+  /** Short label, e.g. "Bash", "assistant", "task_complete". */
+  label: string;
+  /** Truncated content snippet. */
+  detail: string;
+}
+
+/** GET /api/live/sessions?hours=24 */
+export type LiveSessionsResponse = LiveSessionSummary[];
+
+/** GET /api/live/sessions/:source/:id?limit=120 */
+export interface LiveSessionDetail {
+  session: LiveSessionSummary;
+  /** Newest entries last, capped by ?limit. */
+  activity: LiveActivityEntry[];
+}

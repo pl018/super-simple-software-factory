@@ -37,7 +37,7 @@ adws/
     └── sssf.db                  gitignored SQLite trace db the visualizer polls
 ```
 
-**v1 runs Pi only.** `coding_agent: pi`, default model `gemini-3.6-flash`, thinking `medium`. `claude_code` is specced in the config and stubbed in the interface — it lands in v2.
+**Three backends, chosen per agent.** `coding_agent: claude_code` (Claude models, Claude subscription — the default), `codex` (GPT models, ChatGPT subscription), or `pi` (API-key providers such as Gemini). The starter roster runs Fable 5 for planning/review, Sonnet 5 for scouting, and GPT-5.6 Sol for building/documenting — all on subscription auth, no API keys.
 
 ## The phase model
 

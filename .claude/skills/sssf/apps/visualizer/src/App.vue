@@ -1,7 +1,9 @@
 <script setup lang="ts">
-import { useRoute, hrefFor, phaseCrumb } from './lib/router'
+import { useRoute, hrefFor, liveHref, phaseCrumb } from './lib/router'
 import SessionsList from './components/SessionsList.vue'
 import SessionTrace from './components/SessionTrace.vue'
+import LiveList from './components/LiveList.vue'
+import LiveDetail from './components/LiveDetail.vue'
 
 const route = useRoute()
 </script>
@@ -19,23 +21,41 @@ const route = useRoute()
         </svg>
         <span class="brand">Super Simple Software Factory</span>
         <span class="sep">›</span>
-        <a :href="hrefFor()" :class="{ current: !route.adwId }">sessions</a>
-        <template v-if="route.adwId">
+        <a :href="hrefFor()" :class="{ current: route.view === 'factory' && !route.adwId }"
+          >factory</a
+        >
+        <a :href="liveHref()" :class="{ current: route.view === 'live' && !route.liveId }">live</a>
+        <template v-if="route.view === 'factory' && route.adwId">
           <span class="sep">›</span>
           <a :href="hrefFor(route.adwId)" :class="{ current: !route.phaseId }">{{
             route.adwId
           }}</a>
         </template>
-        <template v-if="route.adwId && route.phaseId">
+        <template v-if="route.view === 'factory' && route.adwId && route.phaseId">
           <span class="sep">›</span>
           <span class="current">{{ phaseCrumb ?? route.phaseId }}</span>
+        </template>
+        <template v-if="route.view === 'live' && route.liveId">
+          <span class="sep">›</span>
+          <span class="current">{{ route.liveId.slice(0, 8) }}</span>
         </template>
       </nav>
       <span class="live-hint"><span class="live-dot" /> live</span>
     </header>
     <main>
-      <SessionsList v-if="!route.adwId" />
-      <SessionTrace v-else :key="route.adwId" :adw-id="route.adwId" :phase-id="route.phaseId" />
+      <template v-if="route.view === 'live'">
+        <LiveDetail
+          v-if="route.liveSource && route.liveId"
+          :key="route.liveId"
+          :source="route.liveSource"
+          :live-id="route.liveId"
+        />
+        <LiveList v-else />
+      </template>
+      <template v-else>
+        <SessionsList v-if="!route.adwId" />
+        <SessionTrace v-else :key="route.adwId" :adw-id="route.adwId" :phase-id="route.phaseId" />
+      </template>
     </main>
   </div>
 </template>

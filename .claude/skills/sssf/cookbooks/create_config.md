@@ -18,10 +18,10 @@ Writes `adws/adw_sssf_config/sssf.config.yaml` — creating the directory if nee
 
 ```yaml
 defaults:
-  coding_agent: pi                 # v1: pi only (claude_code is specced, stubbed until v2)
-  model: google/gemini-3.6-flash   # ALWAYS provider/model-id — a bare id is ambiguous
+  coding_agent: claude_code        # claude_code | codex | pi — dispatched per agent
+  model: claude-sonnet-5           # claude_code/codex: the CLI's model id; pi: provider/model-id
   thinking: medium                 # off | minimal | low | medium | high | xhigh | max
-  harness_engineering: []          # pi extension names
+  harness_engineering: []          # pi extension names (pi agents only)
   data_dir: adws/adw_data          # runtime home: {data_dir}/sessions/{adw_id}/{agent_name}/
 
 observability:
@@ -30,8 +30,8 @@ observability:
 
 agents:
   - name: planner                  # ADW scripts name agents, never models
-    coding_agent: pi
-    model: google/gemini-3.6-flash
+    coding_agent: claude_code
+    model: claude-fable-5
     thinking: high
     color: "#a78bfa"               # optional hex — this agent's lane color in the visualizer
     purpose: Turn a request into a plan the builder can implement without asking questions.

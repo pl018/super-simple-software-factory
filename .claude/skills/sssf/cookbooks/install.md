@@ -27,7 +27,7 @@ Run from the **target repo root** — the cwd is where everything lands. If the 
 
 The two `*_engineering` dirs mirror the two config keys of the same name: `prompt_engineering` is what an agent is told, `harness_engineering` is what its harness can do. Both are yours the moment they are stamped. Edit them in `adws/adw_data/`, never back inside the skill.
 
-`harness_engineering/` ships with `subagents.ts` — the pi extension backing `subagent_create` / `_continue` / `_list` / `_remove`, wired to the planner and scout in the starter roster.
+`harness_engineering/` ships with `subagents.ts` — the pi extension backing `subagent_create` / `_continue` / `_list` / `_remove`. No starter agent uses it (the roster's claude_code agents get subagents from the built-in `task` tool); it stays stamped for anyone who adds a pi agent.
 
 ## Idempotency
 
@@ -35,9 +35,9 @@ Re-running is safe. `install.py` skips **every** file that already exists — yo
 
 ## Post-install checklist
 
-1. **Env** — `cp .env.sample .env`, then set `OPENROUTER_API_KEY` in `.env`. (v1 runs Pi; `ANTHROPIC_API_KEY` / `CLAUDE_CODE_PATH` are only needed once Claude Code lands in v2.)
-2. **Pi is installed and on PATH** — `pi --version`. Set `PI_PATH` in `.env` if it is not.
-3. **The model resolves** — the config's default `gemini-3.6-flash` must be a registered id in `~/.pi/agent/models.json`. Check with `pi --list-models` or read the file directly; see `references/config.md` for model resolution.
+1. **Env** — `cp .env.sample .env`. The starter roster runs on subscription auth, so no API keys are required; the file documents optional overrides (`CLAUDE_CODE_PATH`, `CODEX_PATH`, `CLAUDE_CODE_OAUTH_TOKEN` for headless runs).
+2. **The CLIs are installed and logged in** — `claude --version` (Claude Code, on your Claude subscription) and `codex --version` + `codex login` (Codex CLI, on your ChatGPT plan). Only needed for the backends your roster actually names; `pi --version` only if a `coding_agent: pi` agent exists.
+3. **The models are real** — claude_code/codex model ids pass straight to the CLI and fail at the agent's first run, not at validate. Check `claude -p --model <id>` accepts yours; codex model ids on ChatGPT auth are account-specific (e.g. `gpt-5.6-sol`). Pi models must resolve in `pi --list-models`; see `references/config.md`.
 4. **Gitignore** — `install.py` appends `adws/adw_data/sessions/`, `adws/adw_data/sssf.db*`, and `.env` for you; confirm they landed. All three are runtime or secrets and must never be committed.
 5. **Git repo** — ADWs that end in a commit phase call `git_helper.commit_all`, which raises if the cwd is not a git repository. Run `git init` and make a first commit before using `adw_plan_build.py`, `adw_plan_build_test.py`, or `adw_simple_sdlc.py`. `adw_document.py` needs one too: it measures the change with `git diff` against a base ref (`main` by default, `--base` to override).
 6. **Smoke test** — `just demo` runs two cheap read-only workflows back to back, or run the smallest ADW directly:

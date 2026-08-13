@@ -8,11 +8,12 @@ Edit the agent's entry in place:
 
 ```yaml
   - name: builder
-    model: google/gemini-3.6-flash   # ALWAYS provider/model-id
+    coding_agent: codex              # claude_code | codex | pi
+    model: gpt-5.6-sol               # the id that backend's CLI accepts
     thinking: high                   # was medium
 ```
 
-Write the model as `provider/model-id`, never a bare id. The same model is usually carried by several providers, and an ambiguous pattern raises in `agents.validate()` — grounding every agent that inherits it. See `references/config.md`.
+The model id's format follows the backend: claude_code and codex take the CLI's own model id verbatim (`claude-fable-5`, `gpt-5.6-sol`); pi takes `provider/model-id`, never a bare id — an ambiguous pattern raises in `agents.validate()`, grounding every agent that inherits it. See `references/config.md`.
 
 Thinking levels are Pi's reasoning effort: `off | minimal | low | medium | high | xhigh | max`. It only bites when the model is registered with `reasoning: true` in `~/.pi/agent/models.json`.
 
