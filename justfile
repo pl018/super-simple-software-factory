@@ -2,7 +2,7 @@
 #
 # Deliberately small. These are the handful you need on day one: run something,
 # watch it, and open the trace. Add your own as your chains grow, and see the
-# example branch for the fuller set (orchestrator agents, kill, rosters, ipi).
+# example branch for the fuller set (orchestrator agents, rosters, ipi).
 
 # `.env` reaches every ADW through this, so keys work without exporting them.
 set dotenv-load
@@ -78,6 +78,23 @@ tail ADW_ID:
 # what a run has alive right now, with pids: just procs <adw_id>
 procs ADW_ID:
     @sqlite3 {{db}} "select kind, name, pid, command, started_at from processes where adw_id='{{ADW_ID}}' and ended_at is null order by id;"
+
+# stop a running ADW, children first: just kill <adw_id>
+kill ADW_ID:
+    #!/usr/bin/env bash
+    set -euo pipefail
+    pids=$(sqlite3 {{db}} "select pid from processes where adw_id='{{ADW_ID}}' and ended_at is null order by (kind='adw'), id;")
+    if [ -z "$pids" ]; then
+        echo "no live processes for {{ADW_ID}} — nothing to kill"
+        exit 0
+    fi
+    for pid in $pids; do
+        if kill -TERM "$pid" 2>/dev/null; then
+            echo "sent SIGTERM to $pid"
+        else
+            echo "pid $pid already gone"
+        fi
+    done
 
 # ── observability UI ────────────────────────────────────────────────────────
 
