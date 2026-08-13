@@ -14,11 +14,48 @@ const nowMs = ref(Date.now())
 let timer: ReturnType<typeof setInterval> | undefined
 let inflight = false
 
+// ── stall alerts ─────────────────────────────────────────────────────────────
+// One browser notification when a session TRANSITIONS into stalled/dead —
+// never a repeat for a state it was already in.
+
+const alertsOn = ref(localStorage.getItem('sssf-live-alerts') === '1')
+let prevStatus = new Map<string, LiveStatus>()
+
+function notifyTransitions(next: LiveSessionSummary[]) {
+  const canNotify =
+    alertsOn.value && 'Notification' in window && Notification.permission === 'granted'
+  for (const s of next) {
+    const key = `${s.source}:${s.id}`
+    const old = prevStatus.get(key)
+    const bad = s.status === 'stalled' || s.status === 'dead'
+    // `old` undefined = first sight (page load) — stay quiet on those.
+    if (canNotify && bad && old !== undefined && old !== s.status) {
+      const n = new Notification(`${s.project} — ${s.status}`, {
+        body: s.title ?? s.id,
+        tag: key, // replaces an earlier alert for the same session
+      })
+      void n
+    }
+  }
+  prevStatus = new Map(next.map((s) => [`${s.source}:${s.id}`, s.status]))
+}
+
+async function toggleAlerts() {
+  if (!alertsOn.value && 'Notification' in window && Notification.permission !== 'granted') {
+    const perm = await Notification.requestPermission()
+    if (perm !== 'granted') return
+  }
+  alertsOn.value = !alertsOn.value
+  localStorage.setItem('sssf-live-alerts', alertsOn.value ? '1' : '0')
+}
+
 async function tick() {
   if (inflight) return
   inflight = true
   try {
-    sessions.value = await fetchLiveSessions(24)
+    const next = await fetchLiveSessions(24)
+    notifyTransitions(next)
+    sessions.value = next
     nowMs.value = Date.now()
     apiError.value = null
     loaded.value = true
@@ -38,7 +75,8 @@ onUnmounted(() => clearInterval(timer))
 
 // Severity order: what needs eyes first.
 const SECTIONS: { status: LiveStatus; label: string }[] = [
-  { status: 'stalled', label: 'stalled — a turn is open but nothing is moving' },
+  { status: 'dead', label: 'dead — turn open, process gone' },
+  { status: 'stalled', label: 'stalled — process alive but nothing is moving' },
   { status: 'working', label: 'working' },
   { status: 'waiting', label: 'waiting on you' },
   { status: 'idle', label: 'idle' },
@@ -116,6 +154,14 @@ function sourceIcon(s: LiveSessionSummary): string | null {
         @click="mode = m"
       >
         {{ m }}
+      </button>
+      <button
+        class="mode-btn alerts"
+        :class="{ active: alertsOn }"
+        title="Browser notification when a session turns stalled or dead"
+        @click="toggleAlerts"
+      >
+        {{ alertsOn ? '🔔 alerts on' : '🔕 alerts off' }}
       </button>
     </div>
 
@@ -232,13 +278,23 @@ function sourceIcon(s: LiveSessionSummary): string | null {
   animation: pulse 1.6s ease-in-out infinite;
 }
 
-.section-head.stalled {
+.section-head.stalled,
+.section-head.dead {
   color: var(--red);
 }
 
-.section-head.stalled .section-dot {
+.section-head.stalled .section-dot,
+.section-head.dead .section-dot {
   background: var(--red);
   box-shadow: 0 0 8px rgba(255, 111, 103, 0.7);
+}
+
+.section-head.dead {
+  font-weight: 700;
+}
+
+.alerts {
+  margin-left: auto;
 }
 
 .section-head.waiting .section-dot {
@@ -270,6 +326,11 @@ function sourceIcon(s: LiveSessionSummary): string | null {
 
 .card.stalled {
   border-color: rgba(255, 111, 103, 0.55);
+}
+
+.card.dead {
+  border-color: var(--red);
+  border-style: dashed;
 }
 
 .card.working {

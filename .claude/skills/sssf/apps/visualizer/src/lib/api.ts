@@ -4,6 +4,8 @@ import type {
   EventsPage,
   GateResult,
   HealthResponse,
+  LiveKillResponse,
+  LiveNudgeState,
   LiveSessionDetail,
   LiveSessionSummary,
   LiveSource,
@@ -93,4 +95,41 @@ export function fetchLiveSession(
 
 export function fetchGates(adwId: string): Promise<GateResult[]> {
   return getJson(`/api/sessions/${encodeURIComponent(adwId)}/gates`) as Promise<GateResult[]>
+}
+
+async function postJson(url: string, body: unknown): Promise<unknown> {
+  const res = await fetch(url, {
+    method: 'POST',
+    headers: { 'content-type': 'application/json' },
+    body: JSON.stringify(body),
+  })
+  const data = (await res.json().catch(() => null)) as { error?: string } | null
+  if (!res.ok) throw new Error(data?.error ?? `POST ${url} → ${res.status}`)
+  return data
+}
+
+/** Signal a stalled session's CLI process (server re-validates the pid). */
+export function killLiveSession(
+  source: LiveSource,
+  id: string,
+  pid: number,
+  force = false,
+): Promise<LiveKillResponse> {
+  return postJson(`/api/live/sessions/${source}/${encodeURIComponent(id)}/kill`, {
+    pid,
+    force,
+  }) as Promise<LiveKillResponse>
+}
+
+/** Fire the one-time resume call at a dead session. */
+export function nudgeLiveSession(
+  source: LiveSource,
+  id: string,
+  mode: 'report' | 'continue',
+  prompt: string | null,
+): Promise<LiveNudgeState> {
+  return postJson(`/api/live/sessions/${source}/${encodeURIComponent(id)}/nudge`, {
+    mode,
+    prompt,
+  }) as Promise<LiveNudgeState>
 }

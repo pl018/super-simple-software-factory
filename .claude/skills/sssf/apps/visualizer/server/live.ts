@@ -10,11 +10,21 @@
  * state cached in memory). A restart just re-parses from byte 0 — transcripts
  * are the durable record, this module is pure derivation.
  */
-import { readdirSync, statSync, openSync, readSync, closeSync } from "node:fs";
+import {
+  readdirSync,
+  statSync,
+  openSync,
+  readSync,
+  closeSync,
+  readFileSync,
+  readlinkSync,
+} from "node:fs";
 import { homedir } from "node:os";
 import { basename, join } from "node:path";
 import type {
   LiveActivityEntry,
+  LiveProc,
+  LiveProcMatch,
   LiveSessionDetail,
   LiveSessionSummary,
   LiveSource,
@@ -31,6 +41,8 @@ const IDLE_MS = 60 * 60 * 1000;
 /** Feed entries kept per session; the detail endpoint slices from this. */
 const FEED_CAP = 400;
 const SNIPPET = 240;
+/** Full-text ceiling per entry — drill-down shows everything up to this. */
+const FULL_CAP = 20_000;
 
 // ── per-file accumulated state ───────────────────────────────────────────────
 
@@ -80,11 +92,56 @@ function snip(text: unknown, max = SNIPPET): string {
   return t.length > max ? `${t.slice(0, max)}…` : t;
 }
 
-function push(s: Mutable, entry: LiveActivityEntry): void {
-  s.feed.push(entry);
+/** Full content for drill-down: whitespace preserved, hard-capped. */
+function full(text: unknown): string {
+  const t = String(text ?? "").trim();
+  return t.length > FULL_CAP ? `${t.slice(0, FULL_CAP)}\n… [truncated at ${FULL_CAP} chars]` : t;
+}
+
+/**
+ * Build an entry that carries the full text only when the snippet lost
+ * something — most tool ticks are short, so the feed stays light.
+ */
+function entry(ts: string | null, kind: string, label: string, raw: unknown): LiveActivityEntry {
+  const detail = snip(raw);
+  const text = full(raw);
+  return text === detail ? { ts, kind, label, detail } : { ts, kind, label, detail, text };
+}
+
+/** Tool args as readable JSON for the drill-down pane. */
+function argsText(input: unknown): string {
+  if (input === undefined || input === null) return "";
+  if (typeof input === "string") {
+    try {
+      return full(JSON.stringify(JSON.parse(input), null, 2));
+    } catch {
+      return full(input);
+    }
+  }
+  try {
+    return full(JSON.stringify(input, null, 2));
+  } catch {
+    return full(String(input));
+  }
+}
+
+function toolEntry(
+  ts: string | null,
+  kind: string,
+  label: string,
+  hint: unknown,
+  input: unknown,
+): LiveActivityEntry {
+  const detail = snip(hint);
+  const text = argsText(input);
+  return text && text !== detail ? { ts, kind, label, detail, text } : { ts, kind, label, detail };
+}
+
+function push(s: Mutable, e: LiveActivityEntry): void {
+  s.feed.push(e);
   if (s.feed.length > FEED_CAP) s.feed.splice(0, s.feed.length - FEED_CAP);
-  s.lastEvent = entry.kind === "tool" ? `tool: ${entry.label}` : entry.label;
-  if (entry.ts) s.lastTs = entry.ts;
+  s.lastEvent = e.kind === "tool" ? `tool: ${e.label}` : e.label;
+  if (e.ts) s.lastTs = e.ts;
 }
 
 // ── claude transcript lines ──────────────────────────────────────────────────
@@ -110,11 +167,8 @@ function claudeLine(s: Mutable, d: Record<string, unknown>, sidechain = false): 
       const m = (d.message ?? {}) as Record<string, unknown>;
       for (const block of ((m.content ?? []) as Record<string, unknown>[])) {
         if (block?.type === "tool_use") {
-          push(s, {
-            ts, kind: "subagent",
-            label: `sub:${String(block.name ?? "tool")}`,
-            detail: snip((block.input as Record<string, unknown> | undefined)?.command ?? ""),
-          });
+          const input = block.input as Record<string, unknown> | undefined;
+          push(s, toolEntry(ts, "subagent", `sub:${String(block.name ?? "tool")}`, input?.command ?? "", input));
         }
       }
     }
@@ -130,7 +184,7 @@ function claudeLine(s: Mutable, d: Record<string, unknown>, sidechain = false): 
       if (d.isMeta === true || isMetaUserText(content)) return;
       if (!s.title) s.title = snip(content, 120);
       s.turnOpen = true;
-      push(s, { ts, kind: "user", label: "user", detail: snip(content) });
+      push(s, entry(ts, "user", "user", content));
       return;
     }
     if (Array.isArray(content)) {
@@ -142,7 +196,7 @@ function claudeLine(s: Mutable, d: Record<string, unknown>, sidechain = false): 
           if (d.isMeta === true || isMetaUserText(block.text)) continue;
           if (!s.title) s.title = snip(block.text, 120);
           s.turnOpen = true;
-          push(s, { ts, kind: "user", label: "user", detail: snip(block.text) });
+          push(s, entry(ts, "user", "user", block.text));
         }
       }
     }
@@ -173,7 +227,7 @@ function claudeLine(s: Mutable, d: Record<string, unknown>, sidechain = false): 
           : typeof input?.pattern === "string" ? input.pattern
           : typeof input?.description === "string" ? input.description
           : "";
-        push(s, { ts, kind: "tool", label: String(block.name ?? "tool"), detail: snip(hint) });
+        push(s, toolEntry(ts, "tool", String(block.name ?? "tool"), hint, input));
       } else if (block?.type === "text" && typeof block.text === "string" && block.text.trim()) {
         text = block.text;
       } else if (block?.type === "thinking") {
@@ -181,19 +235,28 @@ function claudeLine(s: Mutable, d: Record<string, unknown>, sidechain = false): 
         if (ts) s.lastTs = ts;
       }
     }
-    if (sawToolUse) {
+    // stop_reason is shared across the streamed lines of one API response:
+    // prose written before tool calls carries "tool_use", final prose carries
+    // "end_turn". That separates a mid-turn progress note from the answer.
+    const midTurn = sawToolUse || message.stop_reason === "tool_use";
+    if (text !== null) {
+      if (midTurn) {
+        s.turnOpen = true;
+        push(s, entry(ts, "note", "assistant", text));
+      } else {
+        // Closing prose — the user has the floor.
+        s.turnOpen = false;
+        s.turns += 1;
+        push(s, entry(ts, "assistant", "assistant", text));
+      }
+    } else if (sawToolUse) {
       s.turnOpen = true;
-    } else if (text !== null) {
-      // Final prose with no tool call closes the turn — the user has the floor.
-      s.turnOpen = false;
-      s.turns += 1;
-      push(s, { ts, kind: "assistant", label: "assistant", detail: snip(text) });
     }
     return;
   }
 
   if (type === "system" && typeof d.content === "string" && d.subtype !== "local_command") {
-    push(s, { ts, kind: "meta", label: String(d.subtype ?? "system"), detail: snip(d.content) });
+    push(s, entry(ts, "meta", String(d.subtype ?? "system"), d.content));
   }
 }
 
@@ -235,11 +298,11 @@ function codexLine(s: Mutable, d: Record<string, unknown>): void {
     if (kind === "user_message") {
       const text = typeof payload.message === "string" ? payload.message : "";
       if (!s.title && text && !text.startsWith("<")) s.title = snip(text, 120);
-      push(s, { ts, kind: "user", label: "user", detail: snip(text) });
+      push(s, entry(ts, "user", "user", text));
       return;
     }
     if (kind === "agent_message") {
-      push(s, { ts, kind: "assistant", label: "assistant", detail: snip(payload.message) });
+      push(s, entry(ts, "assistant", "assistant", payload.message));
       return;
     }
     if (kind === "agent_reasoning") {
@@ -257,7 +320,7 @@ function codexLine(s: Mutable, d: Record<string, unknown>): void {
       return;
     }
     if (kind === "error" || kind === "stream_error") {
-      push(s, { ts, kind: "error", label: "error", detail: snip(payload.message) });
+      push(s, entry(ts, "error", "error", payload.message));
       return;
     }
     return;
@@ -269,7 +332,8 @@ function codexLine(s: Mutable, d: Record<string, unknown>): void {
       s.turnOpen = true;
       const name = typeof payload.name === "string" ? payload.name : "tool";
       // function_call carries `arguments`; custom_tool_call carries `input`.
-      push(s, { ts, kind: "tool", label: name, detail: snip(payload.arguments ?? payload.input) });
+      const raw = payload.arguments ?? payload.input;
+      push(s, toolEntry(ts, "tool", name, raw, raw));
     }
   }
 }
@@ -417,17 +481,86 @@ function scanCodex(cutoffMs: number): Found[] {
   return found;
 }
 
+// ── process matching ─────────────────────────────────────────────────────────
+// A transcript is appended-and-closed per line, so no fd ties it to a process.
+// Instead: scan /proc for claude/codex CLI processes, then tie a session to
+// them by session id in argv (exact) or by working directory (best effort).
+
+interface CliProc extends LiveProc {
+  cli: LiveSource;
+}
+
+/** argv[1] values of Claude's helper processes — never a session's own CLI. */
+const CLAUDE_HELPERS = new Set(["daemon", "bg-pty-host", "bg-spare"]);
+
+export function scanCliProcs(): CliProc[] {
+  const procs: CliProc[] = [];
+  for (const name of listDir("/proc")) {
+    if (!/^\d+$/.test(name)) continue;
+    let argv: string[];
+    try {
+      argv = readFileSync(`/proc/${name}/cmdline`, "utf8").split("\0").filter(Boolean);
+    } catch {
+      continue; // exited mid-scan, or not ours to read
+    }
+    if (argv.length === 0) continue;
+    const bin = basename(argv[0]);
+    // The interactive CLI is argv0 "claude"; resumed/forked sessions run the
+    // versioned node binary directly (…/claude/versions/<v>).
+    const isClaude = bin === "claude" || /\/claude\/versions\//.test(argv[0]);
+    const isCodex = bin === "codex";
+    if (!isClaude && !isCodex) continue;
+    if (isClaude && CLAUDE_HELPERS.has(argv[1] ?? "")) continue;
+    let cwd = "";
+    try {
+      cwd = readlinkSync(`/proc/${name}/cwd`);
+    } catch { /* zombie or gone */ }
+    procs.push({
+      pid: Number(name),
+      argv: argv.join(" ").slice(0, 400),
+      cwd,
+      cli: isClaude ? "claude" : "codex",
+    });
+  }
+  return procs;
+}
+
+export function matchSession(
+  procs: CliProc[],
+  source: LiveSource,
+  cwd: string,
+  id: string,
+): LiveProcMatch {
+  const pool = procs.filter((p) => p.cli === source);
+  const exact = pool.filter((p) => id && p.argv.includes(id));
+  if (exact.length > 0) return { kind: "exact", procs: exact };
+  const byCwd = cwd ? pool.filter((p) => p.cwd === cwd) : [];
+  if (byCwd.length > 0) return { kind: "cwd", procs: byCwd };
+  return { kind: "none", procs: [] };
+}
+
 // ── public surface ───────────────────────────────────────────────────────────
 
-function status(s: Mutable, mtimeMs: number, nowMs: number): LiveStatus {
+/** Latest proc match per transcript path; null when the session wasn't stale. */
+const lastMatch = new Map<string, LiveProcMatch | null>();
+
+function status(s: Mutable, mtimeMs: number, nowMs: number, match: LiveProcMatch | null): LiveStatus {
   const age = nowMs - mtimeMs;
-  if (s.turnOpen) return age < STALL_MS ? "working" : "stalled";
+  if (s.turnOpen) {
+    if (age < STALL_MS) return "working";
+    // Quiet past the threshold: a live process means possibly-just-slow, a
+    // missing one means the CLI died mid-turn.
+    return match?.kind === "none" ? "dead" : "stalled";
+  }
   return age < IDLE_MS ? "waiting" : "idle";
 }
 
-function summarize(f: Found, nowMs: number): LiveSessionSummary {
+function summarize(f: Found, nowMs: number, procs: CliProc[]): LiveSessionSummary {
   const s = tail(f.path, f.source, f.id, f.size);
   for (const child of f.children) tailChild(child.path, child.size, s);
+  const stale = s.turnOpen && nowMs - f.mtimeMs >= STALL_MS;
+  const match = stale ? matchSession(procs, f.source, s.cwd, f.id) : null;
+  lastMatch.set(f.path, match);
   return {
     id: s.id,
     source: s.source,
@@ -437,7 +570,7 @@ function summarize(f: Found, nowMs: number): LiveSessionSummary {
     model: s.model,
     originator: s.originator,
     title: s.title,
-    status: status(s, f.mtimeMs, nowMs),
+    status: status(s, f.mtimeMs, nowMs, match),
     last_event: s.lastEvent,
     last_activity_at: s.lastTs ?? new Date(f.mtimeMs).toISOString(),
     started_at: s.startedAt,
@@ -455,8 +588,9 @@ export function liveSessions(hours: number): LiveSessionSummary[] {
   const nowMs = Date.now();
   const cutoffMs = nowMs - hours * 3600 * 1000;
   const found = [...scanClaude(cutoffMs), ...scanCodex(cutoffMs)];
+  const procs = scanCliProcs();
   return found
-    .map((f) => summarize(f, nowMs))
+    .map((f) => summarize(f, nowMs, procs))
     .toSorted((a, b) => (b.last_activity_at ?? "").localeCompare(a.last_activity_at ?? ""));
 }
 
@@ -472,10 +606,16 @@ export function liveSessionDetail(
     (f) => f.id === id,
   );
   if (!found) return null;
-  const session = summarize(found, nowMs);
+  const session = summarize(found, nowMs, scanCliProcs());
   // Child files append after the main file per poll, so re-order by timestamp
   // before slicing — the feed must read as one chronological stream.
   const feed = (cache.get(found.path)?.s.feed ?? [])
     .toSorted((a, b) => (a.ts ?? "").localeCompare(b.ts ?? ""));
-  return { session, activity: feed.slice(-limit) };
+  return {
+    session,
+    activity: feed.slice(-limit),
+    proc_match: lastMatch.get(found.path) ?? null,
+    // Filled in by the route from actions.ts — live.ts stays pure derivation.
+    nudge: null,
+  };
 }
