@@ -4,6 +4,9 @@ import type {
   EventsPage,
   GateResult,
   HealthResponse,
+  LiveSessionDetail,
+  LiveSessionSummary,
+  LiveSource,
   PromptsResponse,
   SessionDetail,
   SessionSummary,
@@ -71,6 +74,21 @@ export async function fetchPrompts(adwId: string, agent: string): Promise<Prompt
 
 export function fetchEnvelopes(adwId: string): Promise<Envelope[]> {
   return getJson(`/api/sessions/${encodeURIComponent(adwId)}/envelopes`) as Promise<Envelope[]>
+}
+
+export function fetchLiveSessions(hours = 24): Promise<LiveSessionSummary[]> {
+  return getJson(`/api/live/sessions?hours=${hours}`) as Promise<LiveSessionSummary[]>
+}
+
+export function fetchLiveSession(
+  source: LiveSource,
+  id: string,
+  hours = 24,
+  limit = 120,
+): Promise<LiveSessionDetail> {
+  return getJson(
+    `/api/live/sessions/${source}/${encodeURIComponent(id)}?hours=${hours}&limit=${limit}`,
+  ) as Promise<LiveSessionDetail>
 }
 
 export function fetchGates(adwId: string): Promise<GateResult[]> {

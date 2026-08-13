@@ -280,6 +280,8 @@ bunx vite
 
 It resolves its target through `--db`, then `SSSF_DB`, then `<cwd>/adws/adw_data/sssf.db`, so one instance can point at any stamped repo. Pass the db explicitly, because the server runs from the app dir.
 
+The UI also has a **live** tab (`#/live`) that monitors every coding-agent session on the machine — interactive Claude Code and Codex sessions included, not just ADW runs. The server tails the CLIs' own transcripts (`~/.claude/projects/**.jsonl`, `~/.codex/sessions/**.jsonl`) at poll time; no hooks, no daemon, no ingest. Sessions group by state: **stalled** (a turn is open but the transcript stopped growing), **working**, **waiting on you**, and **idle**. Each card opens a live activity feed of prompts, tool calls, and replies. Design notes: `docs/plans/live-session-monitor.md`.
+
 ---
 
 ## What is in this branch

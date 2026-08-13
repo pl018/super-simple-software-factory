@@ -23,4 +23,9 @@ export type {
   PhaseStatus,
   PhaseKind,
   EventType,
+  LiveSource,
+  LiveStatus,
+  LiveSessionSummary,
+  LiveSessionDetail,
+  LiveActivityEntry,
 } from '@shared/types'
