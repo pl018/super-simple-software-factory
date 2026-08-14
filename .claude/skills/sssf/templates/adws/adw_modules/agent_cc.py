@@ -221,8 +221,13 @@ def run(request: AgentRequest, on_event: Optional[Callable[[dict], None]] = None
     result.returncode = process.wait()
     if on_exit:
         on_exit(process.pid)
-    if result.returncode != 0 and not result.text:
-        raise RuntimeError(f"claude exited {result.returncode}: {stderr.strip()[-800:]}")
+    if result.returncode != 0:
+        # A nonzero exit is a CLI-reported failure even when text arrived first:
+        # partial text parsed as an envelope is a swallowed failure.
+        detail = stderr.strip()[-800:]
+        if result.text:
+            detail += f"\nlast agent text: {result.text.strip()[-400:]}"
+        raise RuntimeError(f"claude exited {result.returncode}: {detail}")
     marker.parent.mkdir(parents=True, exist_ok=True)
     marker.touch()                     # the session exists — every later send resumes it
     return result

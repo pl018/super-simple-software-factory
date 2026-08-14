@@ -231,7 +231,11 @@ def run(request: AgentRequest, on_event: Optional[Callable[[dict], None]] = None
     result.returncode = process.wait()
     if on_exit:
         on_exit(process.pid)
-    if result.returncode != 0 and not result.text:
+    if result.returncode != 0:
+        # A nonzero exit is a CLI-reported failure even when text arrived first:
+        # partial text parsed as an envelope is a swallowed failure.
         detail = " | ".join(errors[-3:]) or stderr.strip()[-800:]
+        if result.text:
+            detail += f"\nlast agent text: {result.text.strip()[-400:]}"
         raise RuntimeError(f"codex exited {result.returncode}: {detail}")
     return result
