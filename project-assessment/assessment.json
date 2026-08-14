@@ -1,0 +1,338 @@
+{
+  "generatedAt": "2026-08-13T23:18:55Z",
+  "project": {
+    "summary": "SSSF is a well-designed skeleton with an inverted verification story. The decision density is exceptional (rationale lives next to nearly every choice), the packaging is drift-free (templates byte-identical to the live tree), and the observability UI is the most complete part. But the factory's core is unproven: 1 of 12 workflows has ever run, none since the backend swap to claude_code/codex, there are zero tests anywhere, the in-repo quality blocks are echo-placeholders, and the engine has no timeout or stall detection — a hung CLI blocks an ADW forever while the documented escape hatch (just kill) does not exist. The doc layer still describes the pre-swap 'pi v1' architecture in at least four places.",
+    "sectionCount": 5
+  },
+  "sections": [
+    {
+      "name": "ADW workflows",
+      "lens": "code",
+      "evidenceRoots": ["adws/adw_*.py", "justfile", "README.md"],
+      "grades": {
+        "intent": "partial",
+        "decisions": "solid",
+        "language": "partial",
+        "implementation": "partial",
+        "verification": "missing",
+        "openItems": "partial",
+        "coherence": "partial"
+      },
+      "evidence": {
+        "intent": [
+          "README.md:310-331 — the 12-row workflow table is the only side-by-side spec",
+          "adws/adw_scout.py:10 — per-script Phases: docstring is the de-facto contract",
+          ".claude/skills/sssf/SKILL.md:62-72 — 10 hard invariants every ADW must satisfy",
+          "docs/plans/ — no plan doc covers any workflow; intent lives in table + docstrings only"
+        ],
+        "decisions": [
+          "adws/adw_simple_sdlc.py:16-42 — densest decision record in the repo (3 commits / 3 authors, test-as-code, pinned doc baseline)",
+          "adws/adw_build_test.py:12-19 — failing suite does NOT fail its phase, with why",
+          "adws/adw_build_review.py:12-19 — review ≠ testing, recorded",
+          "Unrecorded: why MAX_FIX_LOOPS=3; MAX_REVISION_LOOPS=3 (adw_build_review.py:30) vs =2 (adw_simple_sdlc.py:54)"
+        ],
+        "language": [
+          "README.md:215 — phase kinds engineer|agent|code used verbatim in all 12 scripts",
+          "session/run/adw_id used interchangeably (session.py returns 'run', db table 'sessions', README says 'run')",
+          "justfile:56-61 — recipe 'sdlc' runs the chain WITHOUT review/document; 'simple-sdlc' runs the fuller one",
+          "adws/adw_prompt.py — declares no REQUIRED_AGENTS, violating SKILL.md:62"
+        ],
+        "implementation": [
+          "All 12 scripts exist, non-stub, 881 lines total; byte-identical to templates",
+          "adws/adw_plan_build_test_quality.py:10 — docstring advertises separate code(test) phase; body at :63 aliases it (test_result = quality_result)",
+          "adws/adw_plan_build_test.py:49,67 — uses weaker artifacts_exist gate where all sibling chains use diff_matches_claims, no comment why",
+          "adw_build_test.py:52-67, adw_plan_build_test.py:52-67, adw_simple_sdlc.py:97-112 — final fix_3 agent runs and is never re-tested (no last-iteration break; two other chains DO guard this)",
+          "record()/commit-fallback/argparse blocks copy-pasted across 4-12 scripts with no shared helper"
+        ],
+        "verification": [
+          "No test file for any ADW script; no tests/, no conftest.py; no .github/ (no CI)",
+          "sssf.db sessions: 3 runs total, all adw_prompt (1 fail), all 2026-08-05 — 1 of 12 workflows has ever run",
+          "No workflow has run since the backend swap (code last touched 2026-08-13; db last written 2026-08-05)",
+          "adws/adw_modules/quality.py:49 — the test/verify phases inside 5 workflows run echo placeholders in this repo"
+        ],
+        "openItems": [
+          ".claude/skills/sssf/cookbooks/create_adw.md:40 — code-phase re-execution not implemented in v1 (affects every kind=code retry)",
+          "adws/adw_modules/gates.py:47,98 — json_parses and tests_pass defined, documented, used by zero workflows",
+          "docs/plans/*.md — Steps lists carry no completion markers; done vs pending indeterminate",
+          "Zero TODO/FIXME markers — all open items are prose-declared, untracked"
+        ],
+        "coherence": [
+          "cookbooks/run_adw.md:111 tells the operator to run 'just kill <adw_id>' — no kill recipe exists in either justfile",
+          "adws/adw_quality.py:37-38 raises on quality failure, contradicting the failing-block-does-not-fail-phase rule stated in adw_build_test.py:17-19",
+          "README.md:360 caveats 3 ADWs for placeholder tests; 5 are affected (run_quality path adds 2)",
+          "SKILL.md:20-24 2-row catalog vs README 12-row canonical table — two sources, one complete"
+        ]
+      },
+      "doneState": "partial",
+      "recommendations": [
+        { "priority": "high", "action": "Run the real chains (adw_plan_build, then adw_simple_sdlc) end to end on this repo and triage what breaks", "why": "1 of 12 workflows has ever run and none since the backend swap — every commit, review, fix-loop, and change-capture path is unproven; all other improvements are speculative until this evidence exists" },
+        { "priority": "med", "action": "Extract shared chain helpers (record(), commit-message fallback, argparse main) into adw_modules and fix the wasted final fix-loop in the 3 unguarded chains", "why": "5-way copy-paste means every chain fix must be applied 5 times; the unguarded loop pays for an agent call whose result is never checked" },
+        { "priority": "med", "action": "Unify the build-phase gate (artifacts_exist vs diff_matches_claims) or record why adw_plan_build_test differs", "why": "one chain silently checks a weaker property than its siblings" },
+        { "priority": "low", "action": "Fix the adw_plan_build_test_quality docstring to match its body", "why": "the docstring advertises a phase that never exists in the trace" }
+      ]
+    },
+    {
+      "name": "Agent engine",
+      "lens": "code",
+      "evidenceRoots": ["adws/adw_modules/"],
+      "grades": {
+        "intent": "solid",
+        "decisions": "solid",
+        "language": "partial",
+        "implementation": "partial",
+        "verification": "missing",
+        "openItems": "partial",
+        "coherence": "partial"
+      },
+      "evidence": {
+        "intent": [
+          "docs/plans/claude-code-codex-backends.md:35-40 — the duck-typed backend surface specified (run/tracker/validate)",
+          "docs/plans/claude-code-codex-backends.md:17-31 — dated 'Verified facts' pin the CLI contracts the code depends on",
+          "adws/adw_modules/agents.py:1-8 — module contract: agent proposes, code disposes; retries re-enter the same session",
+          "adws/adw_modules/permissions.py:1-30 — tools is capability, writes is the boundary, verified after the fact"
+        ],
+        "decisions": [
+          "adws/adw_modules/agent_cc.py:41-45 — disallowedTools-as-complement because bypassPermissions no-ops the allowlist",
+          "adws/adw_modules/runner.py:115-130 — why finish() replaced a side-effecting property (wrote green before test.passed evaluated)",
+          "adws/adw_modules/permissions.py:5-11 — the git-checkout incident that motivated permissions, recorded",
+          "adws/adw_modules/quality.py:8-28 — placeholders ship on purpose: silent-pass is worse than loud theater"
+        ],
+        "language": [
+          "agent_pi.py:1 — 'v1's only coding agent' while three backends ship",
+          "agents.py:83-85 — dispatcher docstring still says 'pi run'",
+          "'session' means 3 things: ADW run (adw_id), coding-agent session, CLI thread (agent_codex.py:7-10)",
+          "'retries' names two budgets: JSON_FIX_ATTEMPTS (agents.py:30) and phase retries (data_types.py:29)"
+        ],
+        "implementation": [
+          "Three complete backends; agent_pi is also a hard import dependency of cc and codex (agent_cc.py:25, agent_codex.py:32) — not optional despite README.md:61",
+          "NO timeout or stall detection anywhere: blocking 'for line in process.stdout' at agent_pi.py:260, agent_cc.py:174, agent_codex.py:180; process.wait() with no timeout at :290/:213/:223",
+          "stderr=PIPE never drained until after the stdout loop — a child filling the stderr buffer deadlocks with the same signature as a hang",
+          "agent_cc.py:216-217 (and pi/codex twins) — nonzero exit that produced text is swallowed as success",
+          "Session resume is real and careful: marker files (agent_cc.py:70-71), thread map (agent_codex.py:54-73), model-match rejoin (agents.py:235-243)"
+        ],
+        "verification": [
+          "Zero test files, zero pytest/unittest imports anywhere; no CI",
+          "Only exercised path in trace history is adw_prompt via agent_cc/codex smoke on 2026-08-05",
+          "gates.py:101 tests_pass runs shell with no timeout, unlike quality.py:81 which has one"
+        ],
+        "openItems": [
+          "gates.py:47 json_parses and :98 tests_pass — dead exports, advertised in README.md:245",
+          "agents.py:229-233 — legacy-gate shim for a shape nothing produces",
+          "data_types.py:362 parent_id written but never set non-empty by any caller — span nesting is schema-only",
+          "quality.py:138-146 — test block declared operation='build' because the Literal cannot express 'test'"
+        ],
+        "coherence": [
+          "docs/plans/claude-code-codex-backends.md:68-70 promises codex's ignored tools list is 'ignored with a trace log line' — no such line is emitted (agent_codex.py:144-164)",
+          "UsageBreakdown carries per-component costs (data_types.py:388-433); the tracer stores none of them — codex runs print $0.0000",
+          "gates.py:30,65 resolve paths against cwd while agents run at run.repo_root — an ADW launched from a subdirectory fails its own gates",
+          "README.md:283 promises 'stalled' as a first-class state — true only of the visualizer live tab; an ADW blocked in the engine shows alive with no stall signal"
+        ]
+      },
+      "doneState": "partial",
+      "recommendations": [
+        { "priority": "high", "action": "Add an idle-timeout watchdog around the three backend read loops (kill the child after N minutes without a line; merge stderr into stdout to remove the pipe deadlock)", "why": "a hung CLI currently blocks an ADW forever; the engine has zero stall handling and the visualizer can only see it, not prevent it — this is the engine-side half of the stalled-runs problem" },
+        { "priority": "high", "action": "Stop swallowing nonzero exits that produced text (agent_cc.py:216, agent_pi.py:293, agent_codex.py:226): trace an error event and let the phase decide", "why": "a partially-failed agent call currently reads as success" },
+        { "priority": "med", "action": "Resolve gate paths against run.repo_root instead of cwd in gates.py:30,65", "why": "gates silently depend on where the operator launched the script" },
+        { "priority": "med", "action": "Either emit the promised trace line when codex ignores tools:, or remove the promise from the plan doc", "why": "a narrowed codex agent runs unrestricted and the trace does not say so" },
+        { "priority": "low", "action": "Sweep the stale pi-era wording (agent_pi.py:1, agents.py:85, git_helper.py:61 'documentation.py')", "why": "the comments describe an architecture that no longer exists" }
+      ]
+    },
+    {
+      "name": "Factory config & roster",
+      "lens": "both",
+      "evidenceRoots": ["adws/adw_sssf_config/sssf.config.yaml", ".env.sample", "adws/adw_modules/permissions.py"],
+      "grades": {
+        "intent": "solid",
+        "decisions": "solid",
+        "language": "partial",
+        "implementation": "partial",
+        "verification": "partial",
+        "openItems": "partial",
+        "coherence": "partial"
+      },
+      "evidence": {
+        "intent": [
+          ".claude/skills/sssf/references/config.md:41-72 — full field tables with an explicit Required column",
+          "adws/adw_sssf_config/sssf.config.yaml:9-34 — the yaml self-documents every load-bearing key inline"
+        ],
+        "decisions": [
+          "sssf.config.yaml:101-104 — 'Cross-model on purpose: Sol builds, Fable reviews — the model that authored a diff never grades it'",
+          "sssf.config.yaml:90-91 — recorded negative decision: no tester agent, tests are code phases",
+          "sssf.config.yaml:50,79-81,121-124 — per-agent one-line rationale for every writes/tools choice",
+          "README.md:382 — the roster is declared disposable on purpose"
+        ],
+        "language": [
+          "'engineer' has 3 senses: the human (utils.py:66, tracer.py:23 column), phase kind, and the *_engineering compounds",
+          "backend (code) vs coding_agent (config) — one concept, two names, consistently split"
+        ],
+        "implementation": [
+          "agents.py:39-47 — single loader; defaults merge key list hard-coded at :43",
+          "agents.py:40 — missing config raises bare FileNotFoundError; malformed YAML raises raw traceback; only validate() at :58-78 has curated errors",
+          "No pydantic model sets extra='forbid' — a misspelled key (write:, protected_file:) vanishes silently",
+          "permissions.py:127-185 — writes/protected_files genuinely enforced after every send, with rollback; the strongest enforcement in the factory",
+          "tools: enforced on claude_code (as complement, agent_cc.py:151-156), inert on codex (agent_codex.py:159-164)"
+        ],
+        "verification": [
+          "data_types.py:299-349 — pydantic schema exists; coding_agent is the only closed Literal",
+          "agents.py:58-78 — validate() called by every ADW; checks backends, binaries, prompt files on disk",
+          "thinking is a bare str despite the documented 7-value ladder — unknown values silently fall to 'medium' (agent_cc.py:146)",
+          "No just check recipe; validation only runs as a side effect of launching a workflow; model ids pass through unvalidated (README.md:369 admits it)"
+        ],
+        "openItems": [
+          "observability.poll_ms defined, documented, read by nothing",
+          "defaults.writes merged by agents.py:43 but absent from ConfigDefaults — applied yet unmodeled",
+          ".env.sample omits 5 vars the tooling reads: SSSF_CONFIG, SSSF_DB, SSSF_CLAUDE_PROJECTS, SSSF_CODEX_SESSIONS, PORT",
+          "GEMINI_API_KEY in sample, read by nothing"
+        ],
+        "coherence": [
+          "Roster in yaml matches README:93-94 agent-for-agent, model-for-model (verified)",
+          "README.md:148-156 yaml snippet omits tools which the real config sets; create_config.md:20-50 omits tools, protected_files, and writes entirely",
+          "gpt-5.6-sol is documented as account-specific in 3 places, yet install stamps it unconditionally — the shipped roster is non-portable to another ChatGPT account",
+          "create_config.md:53 says pi has 4 builtin tools and recommends [read, bash]; the shipped scout uses 7"
+        ]
+      },
+      "doneState": "partial",
+      "recommendations": [
+        { "priority": "med", "action": "Guard load_config: catch missing file / bad YAML / ValidationError into one curated message, and set extra='forbid' on the config models", "why": "today a typo'd key silently vanishes and a missing file gives a raw traceback — config errors are the first thing a new install hits" },
+        { "priority": "med", "action": "Add a 'just check' recipe that runs agents.validate for the full roster without launching a workflow", "why": "validation currently costs a live agent run" },
+        { "priority": "low", "action": "Type 'thinking' as a Literal of the documented ladder", "why": "unknown values silently degrade to medium" },
+        { "priority": "low", "action": "Add the 5 missing env vars to .env.sample and drop GEMINI_API_KEY (or mark it pi-only)", "why": "an operator copying the sample never learns the vars the tooling actually reads" }
+      ]
+    },
+    {
+      "name": "Observability",
+      "lens": "both",
+      "evidenceRoots": ["adws/adw_modules/tracer.py", "adws/adw_data/sssf.db", ".claude/skills/sssf/apps/visualizer/"],
+      "grades": {
+        "intent": "partial",
+        "decisions": "solid",
+        "language": "partial",
+        "implementation": "solid",
+        "verification": "partial",
+        "openItems": "partial",
+        "coherence": "partial"
+      },
+      "evidence": {
+        "intent": [
+          ".claude/skills/sssf/references/observability.md:1-27 — the contract: one data path, normative 10-event table",
+          "docs/plans/live-session-monitor.md:3-6 — goal as three questions (running / stalled / waiting on me)",
+          "No acceptance-criteria heading anywhere; the only done-check is a manual curl smoke (live-session-monitor.md:72-80)"
+        ],
+        "decisions": [
+          "observability.md:148-158 — poll-not-push recorded; live-session-monitor.md:14-19 records the dismissed daemon alternative",
+          "tracer.py:92-99 — additive-only migrations with the why",
+          "observability.md:146 / tracer.py:26 — archive is the reader's state, not the run's"
+        ],
+        "language": [
+          "'session' overloaded 3 ways: ADW run, live CLI transcript (shared/types.ts:360), agent-within-run (agent_sessions)",
+          "'dead' status exists in code and UI (types.ts:325, LiveList.vue:77-83) but in neither the plan doc nor README:283"
+        ],
+        "implementation": [
+          "Factory tab: list + waterfall + phase detail + prompts + envelopes + gates (SessionTrace 858 lines, PhaseDetail 1265 lines); live tab: sections, drill-down, kill/nudge",
+          "9 of 10 event types have deliberate UI treatment; phase_start has zero references in src/",
+          "processes table is written (tracer.py:174-203, 8 live rows) and read by NOTHING in the UI — the 'how do I stop this run' table has no surface",
+          "Every server route wrapped in safely() (server/index.ts:52-64); per-file errors deliberately swallowed in live.ts so one bad transcript cannot fail a poll"
+        ],
+        "verification": [
+          "Zero test files; no test script in package.json; tracer.py has no coverage of any kind",
+          "Static gates are real and strict: vue-tsc --noEmit strict + oxlint correctness:error + vite build (package.json:11, tsconfig.json:12-19) — they pass",
+          "The streaming property is 'verified' by a one-off manual observation (observability.md:46)"
+        ],
+        "openItems": [
+          "live-session-monitor.md:84 still lists kill/steer as out of scope — implemented 2026-08-13 (commit 51b1ed3) without the plan updating",
+          "Gemini/pi transcript parsing and ADW-trace/live-session merge remain genuinely open (:85-87)",
+          "Unregistered: processes-no-UI, phase_start unrendered, zero tests"
+        ],
+        "coherence": [
+          "shared/types.ts:4-5 claims every interface mirrors a table one-for-one — 7 tables, 6 interfaces; processes has no mirror",
+          "package.json:5 / README:273 say 'read-only UI'; three mutating endpoints exist (archive, kill, nudge)",
+          "observability.md:51-58 documents sessions with 8 columns; the table has 10 (adw_name, archived missing from the DDL doc)",
+          "Status thresholds match the plan exactly: STALL_MS/IDLE_MS at live.ts:37-38"
+        ]
+      },
+      "doneState": "partial",
+      "recommendations": [
+        { "priority": "med", "action": "Surface the processes table in the factory tab (pid, phase, alive) and give phase_start a rendered treatment", "why": "the one table that answers 'what is this run running and how do I stop it' is invisible in the UI that exists to answer exactly that" },
+        { "priority": "med", "action": "Doc turnover: add 'dead' + kill/nudge to README and the live-monitor plan, fix the sessions DDL in observability.md, reword the 'read-only' claims", "why": "the docs are one feature-generation behind the code they describe" },
+        { "priority": "low", "action": "Add a bun test smoke for server/live.ts parsing (feed a fixture transcript, assert statuses)", "why": "the status state machine is the part users trust for intervention decisions and it has zero tests" }
+      ]
+    },
+    {
+      "name": "SSSF skill packaging",
+      "lens": "domain",
+      "evidenceRoots": [".claude/skills/sssf/"],
+      "grades": {
+        "intent": "partial",
+        "decisions": "partial",
+        "language": "partial",
+        "implementation": "solid",
+        "verification": "missing",
+        "openItems": "partial",
+        "coherence": "partial"
+      },
+      "evidence": {
+        "intent": [
+          "cookbooks/install.md:13-27 — stamped-artifact table (source → destination → tracked) + 6-step checklist with a green condition",
+          "SKILL.md:60-73 — 10 hard rules as global acceptance criteria",
+          "SKILL.md itself never states what install does — intent lives one hop away"
+        ],
+        "decisions": [
+          "scripts/install.py:26-32 — gitignore entries justified by a recorded incident",
+          "cookbooks/install.md:34 — idempotency tradeoff recorded (skip-by-default doubles as drift check)",
+          "Unrecorded: why the visualizer lives inside the skill; why templates are byte-copies rather than references"
+        ],
+        "language": [
+          "SKILL.md:9 says 'Pi in v1' while SKILL.md:76 says three backends with claude_code default — same file, both claims",
+          "cookbooks/update_modules.md:17 and sssf_overview.md:26 — agent_cc 'stubbed, lands in v2' while it is the default backend",
+          "update_modules.md:23-24 — console.py listed twice with different descriptions"
+        ],
+        "implementation": [
+          "diff -rq adws templates/adws → zero drift; all 29 Python files byte-identical; justfile, env.sample, config also identical",
+          "install.py's six stamp() calls match the documented table row-for-row",
+          "The visualizer is used from the skill, never stamped; target repos must bun install at first just obs",
+          "Parity is maintained by hand — no sync script or check enforces it"
+        ],
+        "verification": [
+          "Only verification is the manual just demo smoke (install.md:43-56)",
+          "The 'drift check' verifies presence, not content — a stale stamped file reports as 'skipped'",
+          "No test that install stamps the right files; no template-parity assertion; no CI"
+        ],
+        "openItems": [
+          "install.py:10-11 docstring: '4 starter agents' (there are 5), omits harness_engineering and justfile which it stamps",
+          "install.md:41 documents 3 gitignore entries; install.py appends 5",
+          "update_modules.md — agent_codex.py missing entirely from the module table",
+          "sssf_overview.md:17-21 lists 10 of the 12 ADWs (quality + plan_build_test_quality absent)"
+        ],
+        "coherence": [
+          "install.md:11 supports user-scope installs, but the stamped justfile:89 'obs' recipe hardcodes the project-scope path .claude/skills/sssf/apps/visualizer — a user-scope install gets a broken just obs that install.py:94 tells them to run",
+          "README.md:273 says UI on port 4600; justfile and run_adw.md say UI 4601 / API 4600",
+          "cookbooks/install.md:50 smoke green condition still says 'Pi ran'"
+        ]
+      },
+      "doneState": "partial",
+      "recommendations": [
+        { "priority": "med", "action": "Add a template-parity check (a just recipe or pre-commit diff of adws/ vs templates/adws/) since parity is currently hand-maintained", "why": "the one packaging bug that already bit (commit 035231a) was exactly this class" },
+        { "priority": "med", "action": "One doc-turnover pass across SKILL.md + cookbooks: purge 'pi v1 / stubbed' claims, fix counts (4→5 agents, 3→5 gitignore entries, 10→12 ADWs), add agent_codex.py to the module table", "why": "the install docs are the first thing a new adopter reads and they describe the previous architecture" },
+        { "priority": "low", "action": "Make just obs resolve the skill path (project scope, then ~/.claude fallback)", "why": "user-scope installs get a broken recipe the installer itself advertises" }
+      ]
+    }
+  ],
+  "crossCutting": {
+    "contradictions": [
+      "The factory's core loop is unproven in its current form: 1 of 12 workflows has ever run, none since the backend swap, zero tests exist, and the in-repo quality blocks are echo placeholders — a verification factory that is itself unverified.",
+      "Stall handling is split brain: the engine has no timeout at all (a hung CLI blocks forever at the blocking stdout loops), the documented escape hatch 'just kill' does not exist in any justfile, and the only real stall tooling is the visualizer's manual kill/nudge added 2026-08-13.",
+      "The doc layer describes the pre-swap architecture: 'pi v1 / agent_cc stubbed' persists in SKILL.md:9, update_modules.md:17, sssf_overview.md:26, and the backends plan doc, while claude_code is the shipping default.",
+      "'Read-only observability' is claimed in three places while the server now exposes three mutating endpoints (archive, kill, nudge).",
+      "Quality-failure philosophy contradicts itself: adw_quality.py:37-38 fails the phase on a failing block; adw_build_test.py:12-19 declares failing blocks must not fail the phase.",
+      "gates.py resolves artifact paths against the operator's cwd while agents write at run.repo_root — correctness depends on where the script was launched."
+    ],
+    "orphanedVocabulary": [
+      "session — three meanings (ADW run, coding-agent CLI transcript, agent-within-a-run) with no disambiguating terms in code or UI",
+      "engineer — the human operator, a phase kind, and the *_engineering compounds",
+      "backend vs coding_agent — one concept, two names (code vs config)",
+      "retries — two different budgets (JSON fix attempts vs gate-correction loops) surfaced identically in the console",
+      "sdlc — the justfile recipe 'sdlc' runs the chain without review or documentation; 'simple-sdlc' runs the fuller chain",
+      "roster — docs-only term; never appears as a code identifier"
+    ]
+  }
+}

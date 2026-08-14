@@ -41,15 +41,20 @@ def repo_root() -> Path:
 
 
 def commit_all(message: str) -> str:
-    """Stage the working tree and commit it. Returns the new short sha."""
+    """Stage the working tree and commit it. Returns the short sha that holds the work.
+
+    A clean tree is not an error: an agent may have committed its own work mid-phase
+    despite instructions, and the chain must not fail when the changes are already in
+    history — so return HEAD instead of raising. Whether the phases produced anything
+    at all is the gates' question (diff_matches_claims), not this function's.
+    """
     if not is_repo():
         raise RuntimeError(
             "not a git repository — a commit phase needs one. Run `git init` in the "
             "repo root (and make a first commit) before running an ADW that commits.")
     _git("add", "-A")
-    if not _git("status", "--porcelain"):
-        raise RuntimeError("nothing to commit — the preceding phases changed no files")
-    _git("commit", "-m", message)
+    if _git("status", "--porcelain"):
+        _git("commit", "-m", message)
     return _git("rev-parse", "--short", "HEAD")
 
 
