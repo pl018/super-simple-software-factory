@@ -33,6 +33,10 @@ defaults:
     - adws/adw_sssf_config/
     - adws/adw_*.py
   data_dir: adws/adw_data          # runtime home: {data_dir}/sessions/{adw_id}/{agent_name}/
+  # Watchdog: kill an agent process when its stdout goes SILENT this long — it
+  # measures silence, not runtime, so a long turn that keeps emitting events
+  # never trips it. 0 disables. Enforced in adw_modules/watchdog.py.
+  stall_timeout_seconds: 600
 
 observability:
   db: adws/adw_data/sssf.db        # tracer writes here directly; the UI polls it

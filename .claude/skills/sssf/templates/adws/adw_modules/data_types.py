@@ -336,6 +336,10 @@ class ConfigDefaults(BaseModel):
         "adws/adw_modules/", "adws/adw_sssf_config/", "adws/adw_*.py",
     ])
     data_dir: str = "adws/adw_data"
+    # Watchdog window for every agent process: kill it when its stdout goes
+    # silent this long. Generous on purpose — one long thinking turn can emit
+    # nothing for minutes and must not be mistaken for a hang. 0 disables.
+    stall_timeout_seconds: int = 600
 
 
 class ObservabilityConfig(BaseModel):
@@ -383,6 +387,9 @@ class AgentRequest(BaseModel):
     tools: Optional[list[str]] = None
     extensions: list[str] = Field(default_factory=list)
     cwd: str = "."                  # set from run.repo_root — the codebase root agents work in
+    # Watchdog: kill the agent process if its stdout emits nothing for this
+    # long (see adw_modules/watchdog.py). Silence, not runtime. 0 disables.
+    stall_timeout_seconds: int = 600
 
 
 class UsageBreakdown(BaseModel):
