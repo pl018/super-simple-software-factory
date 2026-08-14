@@ -91,7 +91,7 @@ agents:
   # phase over adw_modules/quality.py. See SKILL.md hard rule 8.
 
   - name: reviewer
-    model: claude-fable-5
+    model: claude-opus-5
     thinking: high
     color: "#fb7185"
     purpose: Confirm that what was built is what was asked for; change nothing.
@@ -100,8 +100,9 @@ agents:
       user: adws/adw_data/prompt_engineering/reviewer/user.md
     writes: []                     # a reviewer that cannot fix cannot quietly fix — the
                                    # claim the tool list only implied, now enforced.
-                                   # Cross-model on purpose: Sol builds, Fable reviews —
-                                   # the model that authored a diff never grades it.
+                                   # Cross-model on purpose: Sol builds, Opus 5 reviews —
+                                   # the model that authored a diff never grades it, and
+                                   # Fable stays outside the chain as the orchestrator.
     tools:                         # full read surface; write only for review.md, no edit
       - read
       - grep
