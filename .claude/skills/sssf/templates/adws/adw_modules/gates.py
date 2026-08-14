@@ -24,10 +24,17 @@ def _size(path: Path) -> str:
     return f"{n}B" if n < 1024 else f"{n / 1024:.1f}KB"
 
 
+def _resolve(run, ref: str) -> Path:
+    """Agents work in run.repo_root and claim paths relative to it, so gates
+    must anchor there too — the orchestrator's own CWD proves nothing."""
+    p = Path(ref)
+    return p if p.is_absolute() else Path(getattr(run, "repo_root", ".")) / p
+
+
 def artifacts_exist(envelope: EnvelopeBase, run) -> GateReport:
     report = GateReport()
     for a in envelope.artifacts:
-        p = Path(a)
+        p = _resolve(run, a)
         report.check(a, p.exists(),
                      f"exists, {_size(p)}" if p.exists() else "declared artifact does not exist")
     return report
@@ -36,7 +43,7 @@ def artifacts_exist(envelope: EnvelopeBase, run) -> GateReport:
 def files_non_empty(envelope: EnvelopeBase, run) -> GateReport:
     report = GateReport()
     for a in envelope.artifacts:
-        p = Path(a)
+        p = _resolve(run, a)
         if not (p.exists() and p.is_file()):
             continue                       # existence is artifacts_exist's job
         empty = p.stat().st_size == 0
@@ -47,7 +54,7 @@ def files_non_empty(envelope: EnvelopeBase, run) -> GateReport:
 def json_parses(envelope: EnvelopeBase, run) -> GateReport:
     report = GateReport()
     for a in envelope.artifacts:
-        p = Path(a)
+        p = _resolve(run, a)
         if p.suffix != ".json" or not p.exists():
             continue
         try:
@@ -62,7 +69,7 @@ def diff_matches_claims(envelope: EnvelopeBase, run) -> GateReport:
     """Every file claimed changed must exist on disk."""
     report = GateReport()
     for f in getattr(envelope, "changed_files", []):
-        p = Path(f)
+        p = _resolve(run, f)
         report.check(f, p.exists(),
                      f"exists, {_size(p)}" if p.exists() else "claimed changed file does not exist")
     return report
@@ -98,7 +105,8 @@ def verdict_consistent(envelope: EnvelopeBase, run) -> GateReport:
 def tests_pass(command: str):
     """Gate factory: the given shell command must exit 0."""
     def gate(envelope: EnvelopeBase, run) -> GateReport:
-        result = subprocess.run(command, shell=True, capture_output=True, text=True)
+        result = subprocess.run(command, shell=True, capture_output=True, text=True,
+                                cwd=str(getattr(run, "repo_root", ".")))
         ok = result.returncode == 0
         note = f"exit {result.returncode}"
         if not ok:
