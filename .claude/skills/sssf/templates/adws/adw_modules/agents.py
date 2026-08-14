@@ -130,6 +130,7 @@ def execute(run, phase: Phase, call: AgentCall) -> EnvelopeBase:
             tools=agent.tools,
             extensions=agent.harness_engineering,
             cwd=str(run.repo_root),
+            stall_timeout_seconds=run.cfg.defaults.stall_timeout_seconds,
         )
         result = backend.run(
             request,

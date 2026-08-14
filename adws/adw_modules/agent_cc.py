@@ -25,6 +25,7 @@ from typing import Callable, Optional
 from .agent_pi import ARG_VALUE_CHARS, RESULT_SNIPPET_CHARS, _clip, _label, _text_of
 from .data_types import AgentConfig, AgentRequest, AgentResult
 from .utils import now_iso, operator_env
+from .watchdog import StallTimeout, stream_lines
 
 CLAUDE_PATH = os.environ.get("CLAUDE_CODE_PATH", "claude")
 
@@ -169,45 +170,52 @@ def run(request: AgentRequest, on_event: Optional[Callable[[dict], None]] = None
                                env=operator_env())
     if on_spawn:
         on_spawn(process.pid)
-    with raw_path.open("a") as raw:
-        assert process.stdout is not None
-        for line in process.stdout:
-            raw.write(line)
-            raw.flush()
-            line = line.strip()
-            if not line:
-                continue
-            try:
-                event = json.loads(line)
-            except json.JSONDecodeError:
-                continue
-            etype = event.get("type")
-            if etype == "assistant":
-                message = event.get("message", {}) or {}
-                text = _text_of(message)
-                if text:
-                    result.text = text                    # last assistant message wins
-                turn = _usage_total(message.get("usage", {}) or {})
-                if turn:
-                    result.context_tokens = turn          # occupancy after this message
-            elif etype == "result":
-                usage = event.get("usage", {}) or {}      # cumulative across the whole call
-                result.usage.input_tokens = usage.get("input_tokens") or 0
-                result.usage.output_tokens = usage.get("output_tokens") or 0
-                result.usage.cache_read_tokens = usage.get("cache_read_input_tokens") or 0
-                result.usage.cache_write_tokens = usage.get("cache_creation_input_tokens") or 0
-                result.usage.total_tokens = _usage_total(usage)
-                result.tokens = result.usage.total_tokens
-                result.cost = float(event.get("total_cost_usd") or 0.0)
-                result.usage.total_cost = result.cost
-                if isinstance(event.get("result"), str) and event["result"]:
-                    result.text = event["result"]
-                for model_usage in (event.get("modelUsage") or {}).values():
-                    window = int((model_usage or {}).get("contextWindow") or 0)
-                    if window:
-                        result.context_window = window
-            if on_event:
-                on_event(event)
+    try:
+        with raw_path.open("a") as raw:
+            for line in stream_lines(process, request.stall_timeout_seconds,
+                                     label=f"claude {request.model}"):
+                raw.write(line)
+                raw.flush()
+                line = line.strip()
+                if not line:
+                    continue
+                try:
+                    event = json.loads(line)
+                except json.JSONDecodeError:
+                    continue
+                etype = event.get("type")
+                if etype == "assistant":
+                    message = event.get("message", {}) or {}
+                    text = _text_of(message)
+                    if text:
+                        result.text = text                # last assistant message wins
+                    turn = _usage_total(message.get("usage", {}) or {})
+                    if turn:
+                        result.context_tokens = turn      # occupancy after this message
+                elif etype == "result":
+                    usage = event.get("usage", {}) or {}  # cumulative across the whole call
+                    result.usage.input_tokens = usage.get("input_tokens") or 0
+                    result.usage.output_tokens = usage.get("output_tokens") or 0
+                    result.usage.cache_read_tokens = usage.get("cache_read_input_tokens") or 0
+                    result.usage.cache_write_tokens = usage.get("cache_creation_input_tokens") or 0
+                    result.usage.total_tokens = _usage_total(usage)
+                    result.tokens = result.usage.total_tokens
+                    result.cost = float(event.get("total_cost_usd") or 0.0)
+                    result.usage.total_cost = result.cost
+                    if isinstance(event.get("result"), str) and event["result"]:
+                        result.text = event["result"]
+                    for model_usage in (event.get("modelUsage") or {}).values():
+                        window = int((model_usage or {}).get("contextWindow") or 0)
+                        if window:
+                            result.context_window = window
+                if on_event:
+                    on_event(event)
+    except StallTimeout:
+        # The watchdog already killed and reaped the child; the pid must still
+        # leave the tracer's live-process table before the failure propagates.
+        if on_exit:
+            on_exit(process.pid)
+        raise
 
     stderr = process.stderr.read() if process.stderr else ""
     result.returncode = process.wait()

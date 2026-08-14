@@ -32,6 +32,7 @@ from typing import Callable, Optional
 from .agent_pi import ARG_VALUE_CHARS, RESULT_SNIPPET_CHARS, _clip, _label
 from .data_types import AgentConfig, AgentRequest, AgentResult
 from .utils import now_iso, operator_env
+from .watchdog import StallTimeout, stream_lines
 
 CODEX_PATH = os.environ.get("CODEX_PATH", "codex")
 
@@ -175,49 +176,56 @@ def run(request: AgentRequest, on_event: Optional[Callable[[dict], None]] = None
                                env=operator_env())
     if on_spawn:
         on_spawn(process.pid)
-    with raw_path.open("a") as raw:
-        assert process.stdout is not None
-        for line in process.stdout:
-            raw.write(line)
-            raw.flush()
-            line = line.strip()
-            if not line:
-                continue
-            try:
-                event = json.loads(line)
-            except json.JSONDecodeError:
-                continue
-            etype = event.get("type")
-            if etype == "thread.started" and event.get("thread_id"):
-                result.session_id = str(event["thread_id"])
-                _save_thread(request, result.session_id)
-            elif etype == "item.completed":
-                item = event.get("item") or {}
-                if item.get("type") == "agent_message" and item.get("text"):
-                    result.text = item["text"]            # last agent message wins
-                elif item.get("type") == "error":
-                    errors.append(str(item.get("message") or ""))
-            elif etype == "turn.completed":
-                usage = event.get("usage", {}) or {}
-                billed_input = int(usage.get("input_tokens") or 0)      # includes cache reads
-                cached = int(usage.get("cached_input_tokens") or 0)
-                cache_write = int(usage.get("cache_write_input_tokens") or 0)
-                output = int(usage.get("output_tokens") or 0)
-                turn_total = billed_input + cache_write + output
-                result.usage.input_tokens += max(0, billed_input - cached)
-                result.usage.cache_read_tokens += cached
-                result.usage.cache_write_tokens += cache_write
-                result.usage.output_tokens += output
-                result.usage.reasoning_tokens += int(usage.get("reasoning_output_tokens") or 0)
-                result.usage.total_tokens += turn_total
-                result.tokens += turn_total
-                result.context_tokens = turn_total        # occupancy after the last turn
-            elif etype in ("turn.failed", "error"):
-                message = event.get("message") or (event.get("error") or {}).get("message") or ""
-                if message:
-                    errors.append(str(message))
-            if on_event:
-                on_event(event)
+    try:
+        with raw_path.open("a") as raw:
+            for line in stream_lines(process, request.stall_timeout_seconds,
+                                     label=f"codex {request.model}"):
+                raw.write(line)
+                raw.flush()
+                line = line.strip()
+                if not line:
+                    continue
+                try:
+                    event = json.loads(line)
+                except json.JSONDecodeError:
+                    continue
+                etype = event.get("type")
+                if etype == "thread.started" and event.get("thread_id"):
+                    result.session_id = str(event["thread_id"])
+                    _save_thread(request, result.session_id)
+                elif etype == "item.completed":
+                    item = event.get("item") or {}
+                    if item.get("type") == "agent_message" and item.get("text"):
+                        result.text = item["text"]        # last agent message wins
+                    elif item.get("type") == "error":
+                        errors.append(str(item.get("message") or ""))
+                elif etype == "turn.completed":
+                    usage = event.get("usage", {}) or {}
+                    billed_input = int(usage.get("input_tokens") or 0)  # includes cache reads
+                    cached = int(usage.get("cached_input_tokens") or 0)
+                    cache_write = int(usage.get("cache_write_input_tokens") or 0)
+                    output = int(usage.get("output_tokens") or 0)
+                    turn_total = billed_input + cache_write + output
+                    result.usage.input_tokens += max(0, billed_input - cached)
+                    result.usage.cache_read_tokens += cached
+                    result.usage.cache_write_tokens += cache_write
+                    result.usage.output_tokens += output
+                    result.usage.reasoning_tokens += int(usage.get("reasoning_output_tokens") or 0)
+                    result.usage.total_tokens += turn_total
+                    result.tokens += turn_total
+                    result.context_tokens = turn_total    # occupancy after the last turn
+                elif etype in ("turn.failed", "error"):
+                    message = event.get("message") or (event.get("error") or {}).get("message") or ""
+                    if message:
+                        errors.append(str(message))
+                if on_event:
+                    on_event(event)
+    except StallTimeout:
+        # The watchdog already killed and reaped the child; the pid must still
+        # leave the tracer's live-process table before the failure propagates.
+        if on_exit:
+            on_exit(process.pid)
+        raise
 
     stderr = process.stderr.read() if process.stderr else ""
     result.returncode = process.wait()

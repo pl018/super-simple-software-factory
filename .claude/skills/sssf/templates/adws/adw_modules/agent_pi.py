@@ -18,6 +18,7 @@ from typing import Callable, Optional
 
 from .data_types import AgentConfig, AgentRequest, AgentResult
 from .utils import now_iso, operator_env
+from .watchdog import StallTimeout, stream_lines
 
 PI_PATH = os.environ.get("PI_PATH", "pi")
 MODELS_JSON = os.environ.get("PI_MODELS_PATH",
@@ -255,36 +256,44 @@ def run(request: AgentRequest, on_event: Optional[Callable[[dict], None]] = None
                                env=operator_env())
     if on_spawn:
         on_spawn(process.pid)
-    with raw_path.open("a") as raw:
-        assert process.stdout is not None
-        for line in process.stdout:
-            raw.write(line)
-            raw.flush()                      # events land on disk as they happen
-            line = line.strip()
-            if not line:
-                continue
-            try:
-                event = json.loads(line)
-            except json.JSONDecodeError:
-                continue
-            if event.get("type") == "message_end":
-                message = event.get("message", {})
-                if message.get("role") == "assistant":
-                    text = _text_of(message)
-                    if text:
-                        result.text = text   # last assistant message wins
-                    usage = message.get("usage", {}) or {}
-                    turn = _context_tokens(usage)
-                    result.tokens += turn
-                    result.usage.add_turn(usage, turn)
-                    # Occupancy is read off the last VALID assistant turn, the
-                    # way pi does it — an aborted or errored turn reports usage
-                    # you can't trust, so it must not overwrite a good reading.
-                    if turn and message.get("stopReason") not in ("aborted", "error"):
-                        result.context_tokens = turn
-                    result.cost += (usage.get("cost", {}) or {}).get("total", 0.0) or 0.0
-            if on_event:
-                on_event(event)
+    try:
+        with raw_path.open("a") as raw:
+            for line in stream_lines(process, request.stall_timeout_seconds,
+                                     label=f"pi {request.model}"):
+                raw.write(line)
+                raw.flush()                  # events land on disk as they happen
+                line = line.strip()
+                if not line:
+                    continue
+                try:
+                    event = json.loads(line)
+                except json.JSONDecodeError:
+                    continue
+                if event.get("type") == "message_end":
+                    message = event.get("message", {})
+                    if message.get("role") == "assistant":
+                        text = _text_of(message)
+                        if text:
+                            result.text = text  # last assistant message wins
+                        usage = message.get("usage", {}) or {}
+                        turn = _context_tokens(usage)
+                        result.tokens += turn
+                        result.usage.add_turn(usage, turn)
+                        # Occupancy is read off the last VALID assistant turn,
+                        # the way pi does it — an aborted or errored turn
+                        # reports usage you can't trust, so it must not
+                        # overwrite a good reading.
+                        if turn and message.get("stopReason") not in ("aborted", "error"):
+                            result.context_tokens = turn
+                        result.cost += (usage.get("cost", {}) or {}).get("total", 0.0) or 0.0
+                if on_event:
+                    on_event(event)
+    except StallTimeout:
+        # The watchdog already killed and reaped the child; the pid must still
+        # leave the tracer's live-process table before the failure propagates.
+        if on_exit:
+            on_exit(process.pid)
+        raise
 
     stderr = process.stderr.read() if process.stderr else ""
     result.returncode = process.wait()
