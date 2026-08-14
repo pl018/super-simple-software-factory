@@ -8,11 +8,12 @@ import type {
   GateResult,
   Phase,
   PhaseKind,
+  ProcessRow,
   Session,
   SessionUsage,
 } from '../lib/types'
 import { Bot, SquareTerminal, UserRound } from 'lucide-vue-next'
-import { fetchEnvelopes, fetchEvents, fetchGates, fetchSession } from '../lib/api'
+import { fetchEnvelopes, fetchEvents, fetchGates, fetchProcesses, fetchSession } from '../lib/api'
 import { axisTicks, fmtDate, payloadOk, ts } from '../lib/format'
 import { modelIcon, modelName } from '../lib/models'
 import { agentColor, hexAlpha, parseAgentStart } from '../lib/events'
@@ -20,6 +21,7 @@ import { navigate, phaseCrumb } from '../lib/router'
 import StatusChip from './StatusChip.vue'
 import StatChip from './StatChip.vue'
 import PhaseDetail from './PhaseDetail.vue'
+import ProcessesPanel from './ProcessesPanel.vue'
 
 const props = defineProps<{ adwId: string; phaseId: string | null }>()
 
@@ -30,6 +32,7 @@ const usage = ref<SessionUsage>({ read: 0, written: 0 })
 const events = ref<EventRow[]>([])
 const envelopes = ref<Envelope[]>([])
 const gates = ref<GateResult[]>([])
+const processes = ref<ProcessRow[]>([])
 const apiError = ref<string | null>(null)
 const loaded = ref(false)
 const nowMs = ref(Date.now())
@@ -63,10 +66,17 @@ async function tick() {
 
     // Envelopes and gates only gain rows around phase/agent boundaries — refetch
     // on those events instead of every tick.
-    if (!loaded.value || fresh.some((e) => e.type !== null && SIDE_TABLE_TYPES.has(e.type))) {
+    const boundary = fresh.some((e) => e.type !== null && SIDE_TABLE_TYPES.has(e.type))
+    if (!loaded.value || boundary) {
       const [env, g] = await Promise.all([fetchEnvelopes(props.adwId), fetchGates(props.adwId)])
       envelopes.value = env
       gates.value = g
+    }
+
+    // Process liveness can change without a matching event, so active runs
+    // refresh this side table on the existing poll cadence.
+    if (!loaded.value || boundary || session.value?.status === 'running') {
+      processes.value = await fetchProcesses(props.adwId)
     }
 
     nowMs.value = Date.now()
@@ -545,6 +555,8 @@ function selectPhase(p: Phase) {
     </div>
     <div v-else-if="loaded" class="empty-state">no phases recorded for this session</div>
     <div v-else-if="!apiError" class="empty-state">loading trace…</div>
+
+    <ProcessesPanel v-if="processes.length" :processes="processes" />
 
     <PhaseDetail
       v-if="selectedPhase"

@@ -1,10 +1,11 @@
-import type { AgentStartPayload, EventRow, ToolCallPayload } from './types'
+import type { AgentStartPayload, EventRow, PhaseStartPayload, ToolCallPayload } from './types'
 
 // ── Event dot colors ─────────────────────────────────────────────────────────
 // One color per event type, shared by the session-card timelines and the phase
 // detail list. gate_fail reads as an error signal on purpose.
 
 export const EVENT_DOT_COLORS: Record<string, string> = {
+  phase_start: '#e8b64a',
   agent_start: '#c89bff',
   tool_call: '#5ad2dd',
   handoff: '#94a3ff',
@@ -71,6 +72,10 @@ export function parseAgentStart(e: EventRow): AgentStartPayload | null {
   return parsePayload(e.payload_json) as AgentStartPayload | null
 }
 
+export function parsePhaseStart(e: EventRow): PhaseStartPayload | null {
+  return parsePayload(e.payload_json) as PhaseStartPayload | null
+}
+
 // Args keys most likely to BE the call, in priority order — a bash command, a
 // file path, a search pattern. Used to build the one-line label.
 const ARG_LABEL_KEYS = [
@@ -113,6 +118,13 @@ export function argsSummary(args: Record<string, unknown> | undefined): string {
  * the event name plus whatever hint the payload carries.
  */
 export function eventLabel(e: EventRow): string {
+  if (e.type === 'phase_start') {
+    const phase = parsePhaseStart(e)
+    if (phase?.description) {
+      const name = e.name ?? phase.owner ?? phase.kind ?? 'phase start'
+      return oneLine(`${name} — ${phase.description}`)
+    }
+  }
   if (e.type === 'tool_call') {
     const call = parseToolCall(e)
     if (call?.tool) {

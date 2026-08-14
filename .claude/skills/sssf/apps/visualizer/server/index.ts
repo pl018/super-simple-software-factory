@@ -247,6 +247,10 @@ const server = Bun.serve({
 
     "/api/sessions/:adw_id/gates": safely((req) => json(db.gates(param(req, "adw_id")))),
 
+    "/api/sessions/:adw_id/processes": safely((req) =>
+      json(db.processes(param(req, "adw_id"))),
+    ),
+
     // The exact prompts an agent was sent, read from the session dir. Files are
     // the raw record; the db has no copy of them.
     "/api/sessions/:adw_id/agents/:agent/prompts": safely(async (req) => {

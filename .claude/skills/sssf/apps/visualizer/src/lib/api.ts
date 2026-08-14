@@ -9,6 +9,7 @@ import type {
   LiveSessionDetail,
   LiveSessionSummary,
   LiveSource,
+  ProcessRow,
   PromptsResponse,
   SessionDetail,
   SessionSummary,
@@ -95,6 +96,14 @@ export function fetchLiveSession(
 
 export function fetchGates(adwId: string): Promise<GateResult[]> {
   return getJson(`/api/sessions/${encodeURIComponent(adwId)}/gates`) as Promise<GateResult[]>
+}
+
+export async function fetchProcesses(adwId: string): Promise<ProcessRow[]> {
+  const res = await fetch(`/api/sessions/${encodeURIComponent(adwId)}/processes`)
+  // A server predating the endpoint renders as no process data, not a broken trace.
+  if (res.status === 404) return []
+  if (!res.ok) throw new Error(`GET processes → ${res.status}`)
+  return (await res.json()) as ProcessRow[]
 }
 
 async function postJson(url: string, body: unknown): Promise<unknown> {
