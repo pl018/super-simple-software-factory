@@ -22,6 +22,7 @@ import type {
   EventsPage,
   GateResult,
   Phase,
+  ProcessRow,
   Session,
   SessionDetail,
   SessionSummary,
@@ -63,6 +64,8 @@ export class SssfDb {
   private writer: Database | null = null;
   /** Cache for optionalColumn(), keyed "table.column". Only ever false → true. */
   private readonly columnCache = new Map<string, boolean>();
+  /** Cache for hasTable(), keyed by table name. Only ever false → true. */
+  private readonly tableCache = new Map<string, boolean>();
 
   constructor(path: string) {
     if (!existsSync(path)) {
@@ -121,6 +124,23 @@ export class SssfDb {
 
   private optionalColumn(table: string, column: string): string {
     return this.hasColumn(table, column) ? column : `NULL AS ${column}`;
+  }
+
+  /**
+   * Probe optional tables written by newer tracers without breaking old dbs.
+   * Missing tables are re-probed so one created while the server is running
+   * becomes visible; once present, a tracer migration never removes it.
+   */
+  private hasTable(table: string): boolean {
+    if (!this.tableCache.get(table)) {
+      const row = this.db
+        .query<{ name: string }, [string]>(
+          "SELECT name FROM sqlite_master WHERE type = 'table' AND name = ?",
+        )
+        .get(table);
+      this.tableCache.set(table, row != null);
+    }
+    return this.tableCache.get(table) ?? false;
   }
 
   close(): void {
@@ -400,6 +420,16 @@ export class SssfDb {
         `SELECT id, adw_id, phase_id, attempt, gate, passed, violations_json,
                 ${checks}, created_at
            FROM gate_results WHERE adw_id = ? ORDER BY id`,
+      )
+      .all(adwId);
+  }
+
+  processes(adwId: string): ProcessRow[] {
+    if (!this.hasTable("processes")) return [];
+    return this.db
+      .query<ProcessRow, [string]>(
+        `SELECT id, adw_id, kind, name, pid, command, started_at, ended_at
+           FROM processes WHERE adw_id = ? ORDER BY started_at, id`,
       )
       .all(adwId);
   }

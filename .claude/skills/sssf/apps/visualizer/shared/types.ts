@@ -125,6 +125,22 @@ export interface GateResult {
   created_at: string | null;
 }
 
+/** processes — one row per OS process the tracer supervised for a run. */
+export interface ProcessRow {
+  id: number;
+  adw_id: string;
+  /** 'adw' = the workflow process itself; 'agent' = a coding-agent child. */
+  kind: string | null;
+  /** '' for the adw process, the agent name for a child. */
+  name: string | null;
+  pid: number | null;
+  /** The command line the pid was started as. */
+  command: string | null;
+  started_at: string | null;
+  /** NULL = believed alive. */
+  ended_at: string | null;
+}
+
 /** One item a gate inspected — the parsed element of `checks_json`. */
 export interface GateCheck {
   item: string;
@@ -172,6 +188,13 @@ export interface AgentStartPayload {
   /** Tool allowlist; null means all tools. Absent on pre-config-payload rows. */
   tools?: string[] | null;
   harness_engineering?: string[];
+}
+
+/** Parsed `phase_start` payload — the phase's declared identity. */
+export interface PhaseStartPayload {
+  kind?: string;
+  owner?: string;
+  description?: string;
 }
 
 /**
@@ -292,6 +315,9 @@ export type EnvelopesResponse = Envelope[];
 
 /** GET /api/sessions/:adw_id/gates */
 export type GatesResponse = GateResult[];
+
+/** GET /api/sessions/:adw_id/processes */
+export type ProcessesResponse = ProcessRow[];
 
 /** GET /api/health */
 export interface HealthResponse {

@@ -7,6 +7,7 @@ import type {
   GateCheck,
   GateResult,
   Phase,
+  PhaseStartPayload,
   ToolCallPayload,
 } from '../lib/types'
 import {
@@ -24,7 +25,7 @@ import {
 } from 'lucide-vue-next'
 import { fmtClock, payloadOk, ts } from '../lib/format'
 import { highlightJson, highlightJsonText } from '../lib/highlight'
-import { eventLabel, parseAgentStart, parseToolCall } from '../lib/events'
+import { eventLabel, parseAgentStart, parsePhaseStart, parseToolCall } from '../lib/events'
 import { modelIcon, modelName } from '../lib/models'
 import { fetchPrompts, type PromptsResponse } from '../lib/api'
 import { renderMarkdown } from '../lib/markdown'
@@ -226,6 +227,11 @@ function richCall(e: EventRow): ToolCallPayload | null {
   return e.type === 'tool_call' ? parseToolCall(e) : null
 }
 
+/** Parsed phase boundary metadata for the expanded event treatment. */
+function phaseStart(e: EventRow): PhaseStartPayload | null {
+  return e.type === 'phase_start' ? parsePhaseStart(e) : null
+}
+
 // Safe for v-html: highlightJsonText/highlightJson escape all input.
 function argsHtml(call: ToolCallPayload | null): string {
   return highlightJsonText(JSON.stringify(call?.args ?? {}, null, 2))
@@ -255,6 +261,7 @@ function toggleSection(id: string) {
 }
 
 const typeClass: Record<string, string> = {
+  phase_start: 't-amber',
   gate_fail: 't-red',
   error: 't-red',
   gate_pass: 't-green',
@@ -659,6 +666,22 @@ function togglePanel(id: string) {
             <template v-else-if="e.type === 'tool_call' && e.payload_json">
               <div class="faint">no detail available — legacy event payload</div>
               <pre class="p-pre" v-html="highlightJson(e.payload_json)" />
+            </template>
+            <template v-else-if="phaseStart(e)">
+              <div class="cfg">
+                <div v-if="phaseStart(e)?.kind" class="cfg-row">
+                  <span class="cfg-k">kind</span>
+                  <span class="cfg-chip">{{ phaseStart(e)?.kind }}</span>
+                </div>
+                <div v-if="phaseStart(e)?.owner" class="cfg-row">
+                  <span class="cfg-k">owner</span>
+                  <span class="cfg-v">{{ phaseStart(e)?.owner }}</span>
+                </div>
+                <div v-if="phaseStart(e)?.description" class="cfg-row">
+                  <span class="cfg-k">description</span>
+                  <span class="cfg-v">{{ phaseStart(e)?.description }}</span>
+                </div>
+              </div>
             </template>
             <template v-else-if="e.payload_json">
               <h4>payload</h4>
@@ -1261,5 +1284,9 @@ h3:first-child {
 
 .t-violet {
   color: var(--violet);
+}
+
+.t-amber {
+  color: var(--amber);
 }
 </style>
