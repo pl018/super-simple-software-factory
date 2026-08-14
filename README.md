@@ -270,7 +270,7 @@ That one cursor query is the entire transport. Live view and full history are th
 
 Files stay the raw record (`raw_output.jsonl`, `envelope.json`, `agent_map.json`). The db is the queryable mirror. Losing it loses nothing you cannot rebuild.
 
-The skill ships a read-only UI for this db at `.claude/skills/sssf/apps/visualizer/`: Vue and Vite served by Bun on port 4600, with sessions, a trace waterfall, and per-phase tool-call detail.
+The skill ships a UI for this db at `.claude/skills/sssf/apps/visualizer/`: Vue and Vite served by Bun — API server on port 4600, Vite UI on 4601 — with sessions, a trace waterfall, and per-phase tool-call detail. Reads never block runs; the only writes are manual operator actions (archive a session, kill or nudge a live one), never anything a run triggers itself.
 
 ```bash
 cd .claude/skills/sssf/apps/visualizer && bun install
@@ -280,7 +280,7 @@ bunx vite
 
 It resolves its target through `--db`, then `SSSF_DB`, then `<cwd>/adws/adw_data/sssf.db`, so one instance can point at any stamped repo. Pass the db explicitly, because the server runs from the app dir.
 
-The UI also has a **live** tab (`#/live`) that monitors every coding-agent session on the machine — interactive Claude Code and Codex sessions included, not just ADW runs. The server tails the CLIs' own transcripts (`~/.claude/projects/**.jsonl`, `~/.codex/sessions/**.jsonl`) at poll time; no hooks, no daemon, no ingest. Sessions group by state: **stalled** (a turn is open but the transcript stopped growing), **working**, **waiting on you**, and **idle**. Each card opens a live activity feed of prompts, tool calls, and replies. Design notes: `docs/plans/live-session-monitor.md`.
+The UI also has a **live** tab (`#/live`) that monitors every coding-agent session on the machine — interactive Claude Code and Codex sessions included, not just ADW runs. The server tails the CLIs' own transcripts (`~/.claude/projects/**.jsonl`, `~/.codex/sessions/**.jsonl`) at poll time; no hooks, no daemon, no ingest. Sessions group by state: **working**, **stalled** (a turn is open and the transcript stopped growing, but the CLI process remains), **dead** (the turn is open but the CLI process is gone), **waiting on you**, and **idle**. A stuck session has two manual levers: kill it or nudge a dead session from its card in the live tab, and `just kill <adw_id>` for ADW runs. Each card opens a live activity feed of prompts, tool calls, and replies. Design notes: `docs/plans/live-session-monitor.md`.
 
 ---
 
@@ -293,7 +293,7 @@ super-simple-software-factory/          # the deployable factory, and nothing el
     ├── cookbooks/                      # 9 orchestrator playbooks, loaded lazily
     ├── references/                     # config / handoff / observability specs
     ├── scripts/                        # install.py, make_config.py, make_adw.py
-    ├── apps/visualizer/                # the read-only trace UI (Vue + Vite on Bun)
+    ├── apps/visualizer/                # the trace UI (Vue + Vite on Bun)
     └── templates/                      # EXACTLY what install.py stamps
         ├── sssf.config.yaml            # the starter roster
         ├── prompt_engineering/{agent}/ # system.md + user.md per agent
