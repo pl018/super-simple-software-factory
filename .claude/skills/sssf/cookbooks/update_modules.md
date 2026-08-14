@@ -13,15 +13,15 @@ Extend `adws/adw_modules/` with new low-level logic.
 | `data_types.py` | Every Pydantic model: `AgentCall`, `PhaseParams`, `Phase`, `EnvelopeBase` + one output type per agent call, the config models (`AgentConfig`, `SSSFConfig`), `EventRecord`, and `AgentRequest`/`AgentResult` |
 | `agents.py` | `load_config`, `validate`, resolving an entry → coding-agent interface + model + thinking + harness extensions |
 | `runner.py` | the `Run` object; `run.phase(PhaseParams)` context manager; `ph.call(AgentCall)` |
-| `agent_pi.py` | the Pi interface (v1) — non-interactive `pi -p --mode json`, JSONL stream tailed live, model resolved against `~/.pi/agent/models.json`; `--session-id` creates-or-continues, so running and continuing an agent are the same call |
-| `agent_cc.py` | the Claude Code interface — stubbed in v1, lands in v2 |
+| `agent_cc.py` | the Claude Code interface — the shipping default; `claude -p --output-format stream-json` is tailed live; UUID session ids use a create-vs-resume marker so corrections resume the same context window |
+| `agent_codex.py` | the Codex CLI interface — `codex exec --json` is tailed live; a session-to-thread-id map lets later sends resume the thread; `tools:` is ignored by codex, so the `writes:` boundary in `permissions.py` is what holds |
+| `agent_pi.py` | the Pi interface — for API-key providers such as Gemini and unused in the starter roster; non-interactive `pi -p --mode json`, JSONL stream tailed live, model resolved against `~/.pi/agent/models.json`; `--session-id` creates-or-continues |
 | `gates.py` | validation gates over envelope claims |
 | `changes.py` | deterministic change capture: resolve the base ref, `git diff` into `context_handoff/changes.diff`, adapt the `ChangeSet` into an envelope an agent can be handed |
 | `prompts.py` | load system/user prompt refs from config, render placeholders |
 | `session.py` | mint or join `adw_id`, maintain `agent_map.json`, create session dirs incl. `context_handoff/` |
 | `tracer.py` | append JSONL **and** insert every event into `sssf.db` as it happens |
-| `console.py` | the terminal narrative — every line printed also lands in the db as a `log` event, so the UI reads the same story; plain sequential lines, no spinners |
-| `console.py` | the rich stdout reporter — every line printed is ALSO traced as a `log` event (`{message, level}`) so the terminal and the swim-lane UI tell the same story |
+| `console.py` | the rich stdout reporter — every line printed is ALSO traced as a `log` event (`{message, level}`) so the terminal and the swim-lane UI tell the same story; plain sequential lines, no spinners |
 | `git_helper.py` | branch, status, diff, commit — the raw plumbing `changes.py` composes |
 | `utils.py` | safe subprocess env, logging, `resolve_prompt` |
 
